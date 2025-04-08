@@ -1,33 +1,45 @@
-install.packages('mice')
-library(mice)
-
-
+#read csv data
 data <- read.csv('visualizing_global_co2_data.csv')
 
 
-
+#remove data from before 1982, as it becomes less robust in accuracy and more of extrapolation
 data <- data[data$year > 1981,]
 
+#given that we are going to be using gdp or co2 as a response variable,
+#it wouldn't be correct to impute missing gdp/co2 values. Luckily, the amount of removed rows isn't very largt
 data <- data[!is.na(data$gdp),]
+data <- data[!is.na(data$co2),]
+data <- data[!is.na(data$co2_growth_prct),]
+
+#this column is a predefined interaction term. There are 60 missing values, so we chose to get rid of these
 data <- data[!is.na(data$co2_per_unit_energy),]
+
+#We also decided to remove aggregate data from the dataset, as we are interested in predicting individual countries
 data <- data[!(data$country == 'World'),]
 
 colnames(data)[apply(data,2, anyNA)]
 
+
+#Below, we begin to remove a number of precalculated action terms. Not only are there a lot of missing values in each of these columns,
+#but we can also recalculate them alter if we choose to do so
 x <- colnames(data)
 
+
+#this set of interactions is country's share of the global value as a percentage
+#this can easily be added back later if necessary, and we chose to remove them
 drop <- subset(x, grepl('share', x))
 
 data <- data[, !colnames(data) %in% drop]
-data <- data[!is.na(data$co2),]
-data <- data[!is.na(data$co2_growth_prct),]
 
+
+#the next interaction is per capita interactions, which again we can calculate later
 drop <- subset(x, grepl('per_capita', x))
 
 
 data <- data[, !colnames(data) %in% drop]
 
-
+#this list consists of variables we aren't interest in interpreting. Mainly they are other greenhouse gasses and temperature changes
+#The only added value is trade co2. Not only is it 50% missing values, removing it would help remove colinearity from the data
 drop <- c(
           "nitrous_oxide", 
           "methane", 
@@ -40,16 +52,20 @@ drop <- c(
           )
 data <- data[, !colnames(data) %in% drop]
 
+#this interaction is historical cumulative information. This had a lot of missing values in the dataset, and thus we chose to remove them
 x <- colnames(data)
 
 drop <- subset(x, grepl('cumulative', x))
 data <- data[, !colnames(data) %in% drop]
 
+#these values are summations of two other values, so we decided to remove them as they are colinear
 x <- colnames(data)
 
+#This gets rid of co2 data including
 drop <- subset(x, grepl('including', x))
 data <- data[, !colnames(data) %in% drop]
 
+#lastly, we removed temperature data, as it didn't have much to do with what we wanted to study
 x <- colnames(data)
 
 drop <- subset(x, grepl('temperature', x))
@@ -60,7 +76,7 @@ colnames(data)[apply(data,2, anyNA)]
 
 colSums(is.na(data))
 
-
+#the below code adds an income level categorical value to each country, as described by world bank
 income_level <- matrix(0, nrow = nrow(data), 1)[,1]
 data$income_level <- income_level
 
@@ -117,7 +133,7 @@ data2$income_level[data$country %in% high_income_countries] <- 3
 data2$income_level[data2$income_level == 0] <- 1
 data2$income_level <- as.factor(data2$income_level)
 
-
+#the below code adds a continent categorical variable
 
 africa <- c(
   "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi",
@@ -185,6 +201,7 @@ data2$continent[data2$country %in% north_america] <- "North America"
 data2$continent[data2$country %in% south_america] <- "South America"
 data2$continent[data2$country %in% oceania] <- "Oceania"
 
+#we set the added variables as factor, so that the model doesn't mistake income level for a continuous variable
 data2$continent <- as.factor(data2$continent)
 data2$income_level <- as.factor(data2$income_level)
 
@@ -199,14 +216,22 @@ df <- data2[, sapply(data2, function(x) is.numeric(x) || is.factor(x))]
 
 colSums(is.na(df))
 
+#Lastly, we have two values we imputed using linear regression. Both missing values consisted of less than 5% of the total data lest, thus we believed this was an acceptable course of action
+
+#cement co2 imputatoin
 impute.cement <- lm(cement_co2 ~ ., data = df, na.action = na.exclude)
 missing_row <- is.na(df$cement_co2)
 df$cement_co2[missing_row] <- predict(impute.cement, newdata = df[missing_row, ])
 
+#land co2 imputation
 impute.land <- lm(land_use_change_co2 ~ ., data = df, na.action = na.exclude)
 missing_row <- is.na(df$land_use_change_co2)
 df$land_use_change_co2[missing_row] <- predoct(impute.land, newdata = df[missing_row,])
 
-df$country <- country
 
+#lastly, we added back country labels for viewing/summarization
+df.labaled <- df
+df.labeled$country <- country
+
+VIF(df)
 View(df)
