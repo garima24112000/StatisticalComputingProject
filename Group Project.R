@@ -213,7 +213,7 @@ country <- data2$country
 
 #scale the population and gdp values to be in line with the rest of the dataset
 df$gdp <- df$gdp / 10000000000
-
+df$population <- df$population / 1000000
 
 df <- data2[, sapply(data2, function(x) is.numeric(x) || is.factor(x))]
 
@@ -234,7 +234,7 @@ df$land_use_change_co2[missing_row] <- predoct(impute.land, newdata = df[missing
 
 
 #lastly, we added back country labels for viewing/summarization
-df.labaled <- df
+df.labeled <- df
 df.labeled$country <- country
 
 VIF(df)
