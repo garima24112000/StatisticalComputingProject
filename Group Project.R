@@ -211,9 +211,7 @@ data2$year <- year.1982
 View(data2[data2$continent == 0,])
 country <- data2$country
 
-#scale the population and gdp values to be in line with the rest of the dataset
-df$gdp <- df$gdp / 10000000000
-df$population <- df$population / 1000000
+
 
 df <- data2[, sapply(data2, function(x) is.numeric(x) || is.factor(x))]
 
@@ -222,7 +220,7 @@ colSums(is.na(df))
 
 #Lastly, we have two values we imputed using linear regression. Both missing values consisted of less than 5% of the total data lest, thus we believed this was an acceptable course of action
 
-#cement co2 imputatoin
+#cement co2 imputation
 impute.cement <- lm(cement_co2 ~ ., data = df, na.action = na.exclude)
 missing_row <- is.na(df$cement_co2)
 df$cement_co2[missing_row] <- predict(impute.cement, newdata = df[missing_row, ])
@@ -230,12 +228,15 @@ df$cement_co2[missing_row] <- predict(impute.cement, newdata = df[missing_row, ]
 #land co2 imputation
 impute.land <- lm(land_use_change_co2 ~ ., data = df, na.action = na.exclude)
 missing_row <- is.na(df$land_use_change_co2)
-df$land_use_change_co2[missing_row] <- predoct(impute.land, newdata = df[missing_row,])
+df$land_use_change_co2[missing_row] <- predict(impute.land, newdata = df[missing_row,])
+
+#scale the population and gdp values to be in line with the rest of the dataset
+df$gdp <- df$gdp / 10000000000
+df$population <- (df$population) / 1000000
 
 
-#lastly, we added back country labels for viewing/summarization
+#lastly, we added back country labels for viewing/sumarisation
 df.labeled <- df
 df.labeled$country <- country
-
-VIF(df)
 View(df)
+
