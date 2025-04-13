@@ -240,3 +240,23 @@ df.labeled <- df
 df.labeled$country <- country
 View(df)
 
+
+#install.packages('segmented')
+#install.packages('rpart')
+#install.packages('rpart.plot')
+library(segmented)
+library(rpart)
+library(rpart.plot)
+
+model <- lm(log(gdp) ~ ., data = df)
+model.step <- step(model, direction = 'backward')
+
+cooks_distance <- cooks.distance(model.step)
+influential <- which(cooks_distance > 1)
+
+model.tree <- rpart(log(gdp) ~., data = df,  method = 'anova')
+
+summary(model.step)
+rpart.plot(model.tree)
+summary(model.tree)
+
