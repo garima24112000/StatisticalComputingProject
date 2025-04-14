@@ -264,186 +264,204 @@ summary(model.tree)
 
 
 # ============================================================
-
 # Research Question:
 # "How have the relationships between CO₂ emissions and economic indicators 
 # changed over time since 1982, and are there identifiable breakpoints that 
 # correspond to notable global economic or policy events?"
 
-# Justification for Using Time Series Analysis and Structural Break Testing
-# 1. Temporal Data Structure:
-#    - The dataset comprises annual observations (one per year from 1982 onward), 
-#      aggregated from a panel of countries. This creates a clear, time-ordered 
-#      series of global averages (e.g., for GDP, CO₂, etc.).
-#    - Aggregating the data by year yields a univariate time series suitable for 
-#      standard time series analysis, providing a natural ordering that is essential 
-#      for exploring how relationships evolve over time.
-
-# 2. Changing Relationships Over Time:
-#    - The research question focuses on whether the relationships between key 
-#      economic indicators (e.g., GDP, population) and environmental measures (e.g., 
-#      CO₂ emissions) have shifted over the past decades.
-#    - Time series analysis with structural break testing (using methods like those 
-#      implemented in the 'strucchange' package) is well-suited to detect points in time 
-#      where the underlying regression relationships change.
-
-# 3. Identification of Regime Shifts:
-#    - Structural break tests help identify breakpoints—specific times when the 
-#      parameters of the model (e.g., the coefficients linking CO₂ and GDP) shift. 
-#    - Detecting such breakpoints is crucial for connecting changes in the statistical 
-#      relationships to notable global events, such as the end of the Cold War, the 
-#      dot-com bubble, or the global financial crisis.
-
-# 4. Robustness and Interpretability:
-#    - The method allows us to quantify the magnitude and timing of changes in 
-#      relationships. Once breakpoints are identified, separate models can be estimated 
-#      for each time segment to assess how predictor effects vary over different regimes.
-#    - This step-by-step approach increases both the robustness of the results and 
-#      the clarity with which these changes can be linked to historical economic and 
-#      policy events.
-
-# 5. Advantages Given the Dataset:
-#    - With 37 annual observations, the aggregated data are sufficiently large to allow 
-#      for segmentation without overfitting, while still capturing global trends.
-#    - Compared to other methods, time series structural break analysis provides a direct 
-#      statistical framework to detect when and how these global relationships have changed.
-
-# In summary, using Time Series Analysis combined with Structural Break Testing is justified 
-# for this project because it directly addresses the research question by analyzing the 
-# evolution and stability of key economic-environmental relationships over time, and by 
-# pinpointing the timing of potential regime shifts that may correspond to major global 
-# events. This method provides both robust statistical evidence and a clear narrative 
-# framework linking changes in data trends to real-world economic and policy changes.
-
-# Matches the time-ordered nature of your data.
-# Directly addresses the issue of changing relationships over time.
-# Provides a clear method for identifying shifts in these relationships that may coincide with significant global events.
-# Is suitable for the aggregated, global-level trends in your dataset.
-
+# Using Time Series Analysis(ARIMAX) with Structural Break Testing
+# Temporal Dynamics and Exogenous Influences:
+#   The ARIMAX model extends the traditional ARIMA framework by incorporating external regressors. 
+#   This allows it to capture both the inherent time series properties of log-transformed GDP and 
+#   the simultaneous impact of CO₂ emissions and related variables (such as cement and land use change CO₂ and population), 
+#   providing a comprehensive view of how these factors interact over time.
+# 
+# Structural Change Detection:
+#   Integrating structural break analysis into the workflow facilitates the identification of periods where
+#   the underlying relationships between the economic indicators and environmental variables may have shifted. 
+#   This is crucial for linking potential breakpoints with notable global economic or policy events, 
+#   thus offering deeper insights into regime-dependent dynamics.
+# 
+# Forecasting and Model Evaluation:
+#   By splitting the data into training and testing sets and evaluating forecast accuracy within both the overall and segmented datasets, 
+#   the model not only explains historical relationships but also validates its predictive performance. 
+#   This is important to confirm that the identified shifts are robust and relevant for forecasting future trends.
+# 
+# In summary, the ARIMAX with structural break testing is used because it effectively handles the complexities of time series data with exogenous drivers and 
+# allows for detecting and quantifying changes in relationships over time—a core requirement for your research question.
 # ============================================================
 
+# Load required libraries
 library(zoo)
-library(strucchange)  # for breakpoints testing
+library(strucchange)   # for structural break testing
 library(ggplot2)
+library(forecast)      # for ARIMA forecasting and accuracy metrics
 
-# STEP 1: Aggregate the data by year
-# Since the dataset is a panel of countries, we compute the average for each year.
+### ------------------------------
+### 1. Data Aggregation and Structural Break Testing
+# Assume 'df' is your panel dataset with columns: year, gdp, co2, cement_co2, land_use_change_co2, population.
 df_yearly <- aggregate(cbind(gdp, co2, cement_co2, land_use_change_co2, population) ~ year,
                        data = df, FUN = mean)
-
-# For a more linear interpretation of GDP we take its logarithm.
 df_yearly$log_gdp <- log(df_yearly$gdp)
+
+cat("Total number of annual observations:", nrow(df_yearly), "\n")
 head(df_yearly)
 
-# Check number of observations
-T_obs <- nrow(df_yearly)
-cat("Total number of annual observations:", T_obs, "\n")
-
-# ------------------------------
-# STEP 2: Fit the regression model on the aggregated data
-# Here we model log(gdp) as a function of CO₂ emissions and other related predictors.
-model_agg <- lm(log_gdp ~ co2 + cement_co2 + land_use_change_co2 + population,
-                data = df_yearly)
+# Fit the aggregated regression model
+model_agg <- lm(log_gdp ~ co2 + cement_co2 + land_use_change_co2 + population, data = df_yearly)
 summary(model_agg)
 
-# STEP 3: Determine an appropriate minimum segment size
-# The default h is 0.15, but if floor(0.15 * T_obs) is not greater than the number of predictors (4),
-# we need to set a higher h.
-default_min_seg <- floor(0.15 * T_obs)
-cat("Default minimum segment size (floor(0.15 * T_obs)):", default_min_seg, "\n")
-
-h_new <- 0.25
-cat("Using a new h value of:", h_new, "\n")
-min_seg_new <- floor(h_new * T_obs)
-cat("New minimum segment size (floor(h_new*T_obs)):", min_seg_new, "\n")
-
-# ------------------------------
-# STEP 4: Perform the structural break test with the adjusted h parameter
+# Test for structural breaks
+T_obs <- nrow(df_yearly)
+h_new <- 0.25  # Adjusted minimum segment size
 bp <- breakpoints(log_gdp ~ co2 + cement_co2 + land_use_change_co2 + population,
                   data = df_yearly, h = h_new)
 summary(bp)
 
-# ------------------------------
-# STEP 5: Plot the breakpoints
+# Plot for visual inspection of breakpoints
 plot(bp, main = "Structural Break Test: Breakpoints in the Regression Model")
-# The plot shows the RSS (Residual Sum of Squares) for partitions of the time series along with vertical lines
-# indicating where the breaks are estimated.
-
-#Visualize the residuals over time and overlay the estimated breakpoints:
 plot(df_yearly$year, resid(model_agg),
      main = "Regression Residuals Over Time",
-     xlab = "Years since 1982", ylab = "Residuals",
+     xlab = "Years", ylab = "Residuals",
      pch = 19, col = "blue")
 abline(v = df_yearly$year[bp$breakpoints], col = "red", lwd = 2)
 
-# ------------------------------
-# STEP 6: Evaluate the Performance of the Aggregated Model
+### ------------------------------
+### 2. Converting to Time Series Objects & Preparing External Regressors
+# Create time series for log(GDP) and the regressors (annual data starting in 1982)
+ts_log_gdp <- ts(df_yearly$log_gdp, start = 1982, frequency = 1)
+ts_co2 <- ts(df_yearly$co2, start = 1982, frequency = 1)
+ts_cement_co2 <- ts(df_yearly$cement_co2, start = 1982, frequency = 1)
+ts_land_use_change_co2 <- ts(df_yearly$land_use_change_co2, start = 1982, frequency = 1)
+ts_population <- ts(df_yearly$population, start = 1982, frequency = 1)
 
-# Predicted values from the aggregated model
-predictions <- predict(model_agg, newdata = df_yearly)
+external_regressors <- cbind(co2 = ts_co2,
+                             cement_co2 = ts_cement_co2,
+                             land_use_change_co2 = ts_land_use_change_co2,
+                             population = ts_population)
 
-# Actual values of log_gdp
-actual <- df_yearly$log_gdp
+### ------------------------------
+### 3. Evaluating the Aggregated ARIMAX Model
 
-# Calculate RMSE and MAE
-rmse <- sqrt(mean((actual - predictions)^2))
-mae  <- mean(abs(actual - predictions))
+# For forecast evaluation, split the time series.
+# We use data from 1982 to 2013 as the training set and 2014 to the end as the test set.
+train <- window(ts_log_gdp, end = 2013)
+test  <- window(ts_log_gdp, start = 2014)
 
-cat("Aggregated Model Performance:\n")
-cat("  RMSE:", rmse, "\n")
-cat("  MAE :", mae, "\n")
+train_regressors <- window(external_regressors, end = 2013)
+test_regressors  <- window(external_regressors, start = 2014)
 
-# R-squared and Adjusted R-squared from the model summary:
-model_summary <- summary(model_agg)
-cat("R-squared:", model_summary$r.squared, "\n")
-cat("Adjusted R-squared:", model_summary$adj.r.squared, "\n")
+# Fit ARIMAX on the training set
+model_arimax_train <- auto.arima(train, xreg = train_regressors)
+summary(model_arimax_train)
 
-# =============================================
-# Structural Break Analysis Results and Implications
-# =============================================
+# Forecast for the test period
+h_forecast <- length(test)  # forecast horizon equals the number of test observations
+forecast_arimax <- forecast(model_arimax_train, xreg = test_regressors, h = h_forecast)
 
-# The model was estimated on aggregated annual data (1982–2018) with 37 observations.
-# The regression model:
-#   log(gdp) = β0 + β1 * co2 + β2 * cement_co2 + β3 * land_use_change_co2 + β4 * population + ε
-# 
-# Model performance:
-#   - R-squared: 0.9956, Adjusted R-squared: 0.9951
-#   - RMSE: 0.0236, MAE: 0.0171
+# Plot the forecast vs. actual values
+plot(forecast_arimax, main = "ARIMAX Forecast (Training Data: 1982-2013; Test Data: 2014-?)")
+lines(test, col = "purple", lwd = 1)
+
+# Evaluate forecast performance using common metrics: RMSE, MAE, MAPE, etc.
+accuracy_metrics <- accuracy(forecast_arimax, test)
+print("Aggregated ARIMAX Model Forecast Accuracy:")
+print(accuracy_metrics)
+# This output provides RMSE, MAE, MAPE, and other metrics.
+
+### ------------------------------
+### 4. Evaluating Segmented ARIMAX Models (Within Regime)
+# Using breakpoints, we segment the data. Here we demonstrate evaluation if each segment is long enough to have its own hold-out sample.
+break_indices <- bp$breakpoints
+# Convert indices to years
+break_years <- df_yearly$year[break_indices]
+cat("Break years:", break_years, "\n")
+
+# Define segment boundaries: from 1982 to last observation
+segments <- c(1982, break_years, max(df_yearly$year))
+cat("Segment boundaries (years):", segments, "\n")
+
+# Lists to store segmentation results
+models_segment <- list()
+forecasts_segment <- list()
+accuracy_segment <- list()
+
+for (i in 1:(length(segments)-1)) {
+  seg_start <- segments[i]
+  seg_end   <- segments[i+1]
+  
+  # Subset the data for the current segment
+  seg_data <- subset(df_yearly, year >= seg_start & year <= seg_end)
+  
+  # Check if the segment has at least 8-10 observations to allow split of training and test.
+  if(nrow(seg_data) < 8){
+    cat("Segment", i, "(", seg_start, "to", seg_end, ") is too short for split evaluation. Skipping forecast evaluation for this segment.\n")
+    next
+  }
+  
+  # Split this segment into training (e.g., first 70%) and test (remaining 30%)
+  n_seg <- nrow(seg_data)
+  train_seg_idx <- 1:floor(0.7 * n_seg)
+  test_seg_idx <- (floor(0.7 * n_seg) + 1):n_seg
+  
+  seg_train <- seg_data[train_seg_idx, ]
+  seg_test  <- seg_data[test_seg_idx, ]
+  
+  # Create time series objects for the segment
+  ts_seg_log_gdp <- ts(seg_train$log_gdp, start = seg_train$year[1], frequency = 1)
+  ts_seg_co2 <- ts(seg_train$co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_cement_co2 <- ts(seg_train$cement_co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_land_use_change_co2 <- ts(seg_train$land_use_change_co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_population <- ts(seg_train$population, start = seg_train$year[1], frequency = 1)
+  
+  seg_regressors_train <- cbind(co2 = ts_seg_co2,
+                                cement_co2 = ts_seg_cement_co2,
+                                land_use_change_co2 = ts_seg_land_use_change_co2,
+                                population = ts_seg_population)
+  
+  # Similarly, create test regressors
+  ts_seg_test_log_gdp <- ts(seg_test$log_gdp, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_co2 <- ts(seg_test$co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_cement_co2 <- ts(seg_test$cement_co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_land_use_change_co2 <- ts(seg_test$land_use_change_co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_population <- ts(seg_test$population, start = seg_test$year[1], frequency = 1)
+  
+  seg_regressors_test <- cbind(co2 = ts_seg_test_co2,
+                               cement_co2 = ts_seg_test_cement_co2,
+                               land_use_change_co2 = ts_seg_test_land_use_change_co2,
+                               population = ts_seg_test_population)
+  
+  # Fit the ARIMAX model for the segment training data
+  model_seg <- auto.arima(ts_seg_log_gdp, xreg = seg_regressors_train)
+  models_segment[[i]] <- model_seg
+  cat("Segment", i, "(", seg_start, "to", seg_end, ") model summary:\n")
+  print(summary(model_seg))
+  
+  # Forecast for the length of the test set in this segment
+  h_seg <- nrow(seg_test)
+  fc_seg <- forecast(model_seg, xreg = seg_regressors_test, h = h_seg)
+  forecasts_segment[[i]] <- fc_seg
+  
+  # Evaluate forecast performance in this segment
+  acc_seg <- accuracy(fc_seg, ts_seg_test_log_gdp)
+  accuracy_segment[[i]] <- acc_seg
+  
+  cat("Segment", i, "(", seg_start, "to", seg_end, ") forecast accuracy:\n")
+  print(acc_seg)
+  
+  # Optional: Plot forecast vs. actual for this segment
+  plot(fc_seg, main = paste("ARIMAX Forecast for Segment", i, "(", seg_start, "to", seg_end, ")"))
+  lines(ts_seg_test_log_gdp, col = "blue", lwd = 2)
+}
+
+# Brief Analysis of the Output:
 #
-# These metrics indicate an excellent fit with extremely low residual errors, 
-# implying that the selected predictors (especially co2 and population) explain almost all of the variation in log(gdp)
-# at the aggregated (global) level.
+# - Data consists of 37 annual observations. The aggregated regression has an excellent fit (R² ≈ 0.996),
+#   with significant positive effects from CO₂ and population.
 #
-# Structural break analysis was performed using the 'breakpoints' function with an adjusted minimum segment 
-# parameter (h = 0.25, yielding 9 observations per segment) to ensure sufficient data in each segment.
+# - Structural break tests detect breakpoints at observations 9, 18, and 27, suggesting shifts in the underlying relationships.
 #
-# The analysis identified three significant breakpoints at the following observation indices (converted to normalized breakdates):
-#   - Breakpoint 1: Observation 10 (Normalized ~0.27)
-#   - Breakpoint 2: Observation 19 (Normalized ~0.51)
-#   - Breakpoint 3: Observation 28 (Normalized ~0.76)
+# - The aggregated ARIMAX model (an ARIMA(1,0,0) with exogenous predictors) shows strong persistence and good forecast accuracy.
 #
-# Mapping these indices to calendar years (with year 0 corresponding to 1982):
-#   - Observation 10 corresponds roughly to year 9, i.e., 1982 + 9 = ~1991.
-#   - Observation 19 corresponds roughly to year 18, i.e., 1982 + 18 = ~2000.
-#   - Observation 28 corresponds roughly to year 27, i.e., 1982 + 27 = ~2009.
-#
-# Therefore, the sample is segmented into four distinct regimes:
-#   1. Period 1 (1982–1991)
-#   2. Period 2 (1992–2000)
-#   3. Period 3 (2001–2009)
-#   4. Period 4 (2010–2018)
-#
-# Implications:
-#   - The first breakpoint (~1991) may reflect global changes related to the end of the Cold War
-#     and early globalization trends.
-#   - The second breakpoint (~2000) could be associated with the tech-boom/dot-com bubble period and the
-#     onset of increased global awareness of environmental issues.
-#   - The third breakpoint (~2009) likely corresponds to the impact of the global financial crisis,
-#     which significantly altered economic dynamics and energy consumption patterns.
-#
-# These structural breaks indicate that the relationship between global CO2 emissions, population,
-# and economic output (log(GDP)) has not been stable over time. Instead, it exhibits shifts
-# corresponding to major economic and policy events. 
-#
-# The aggregated model is highly robust at the global level; however, these regime shifts highlight the importance
-# of accounting for time-specific changes in the economic-environmental nexus when making policy decisions or forecasting future trends.
+# - Segmented ARIMAX models indicate that the effect of CO₂ varies across different regimes,
+#   pointing to evolving dynamics over time that may reflect changes in economic or policy contexts.
