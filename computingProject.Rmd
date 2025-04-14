@@ -5,181 +5,361 @@ date: "2025-04-03"
 ---
 
 ```{r}
-# Load required libraries
-library(dplyr)
-library(tidyr)
+#read csv data
+data <- read.csv('visualizing_global_co2_data.csv')
+
+
+#remove data from before 1982, as it becomes less robust in accuracy and more of extrapolation
+data <- data[data$year > 1981,]
+
+#given that we are going to be using gdp or co2 as a response variable,
+#it wouldn't be correct to impute missing gdp/co2 values. Luckily, the amount of removed rows isn't very largt
+data <- data[!is.na(data$gdp),]
+data <- data[!is.na(data$co2),]
+data <- data[!is.na(data$co2_growth_prct),]
+
+#this column is a predefined interaction term. There are 60 missing values, so we chose to get rid of these
+data <- data[!is.na(data$co2_per_unit_energy),]
+
+#We also decided to remove aggregate data from the dataset, as we are interested in predicting individual countries
+data <- data[!(data$country == 'World'),]
+
+colnames(data)[apply(data,2, anyNA)]
+
+
+#Below, we begin to remove a number of precalculated action terms. Not only are there a lot of missing values in each of these columns,
+#but we can also recalculate them alter if we choose to do so
+x <- colnames(data)
+
+
+#this set of interactions is country's share of the global value as a percentage
+#this can easily be added back later if necessary, and we chose to remove them
+drop <- subset(x, grepl('share', x))
+
+data <- data[, !colnames(data) %in% drop]
+
+
+#the next interaction is per capita interactions, which again we can calculate later
+drop <- subset(x, grepl('per_capita', x))
+
+
+data <- data[, !colnames(data) %in% drop]
+
+#this list consists of variables we aren't interest in interpreting. Mainly they are other greenhouse gasses and temperature changes
+#The only added value is trade co2. Not only is it 50% missing values, removing it would help remove colinearity from the data
+drop <- c(
+          "nitrous_oxide", 
+          "methane", 
+          "other_industry_co2", 
+          "consumption_co2_per_gdp", 
+          "consumption_co2",
+          "total_ghg",
+          "total_ghg_excluding_lucf",
+          "trade_co2"
+          )
+data <- data[, !colnames(data) %in% drop]
+
+#this interaction is historical cumulative information. This had a lot of missing values in the dataset, and thus we chose to remove them
+x <- colnames(data)
+
+drop <- subset(x, grepl('cumulative', x))
+data <- data[, !colnames(data) %in% drop]
+
+#these values are summations of two other values, so we decided to remove them as they are colinear
+x <- colnames(data)
+
+#This gets rid of co2 data including
+drop <- subset(x, grepl('including', x))
+data <- data[, !colnames(data) %in% drop]
+
+#lastly, we removed temperature data, as it didn't have much to do with what we wanted to study
+x <- colnames(data)
+
+drop <- subset(x, grepl('temperature', x))
+data <- data[, !colnames(data) %in% drop]
+
+
+colnames(data)[apply(data,2, anyNA)]
+
+colSums(is.na(data))
+
+#the below code adds an income level categorical value to each country, as described by world bank
+income_level <- matrix(0, nrow = nrow(data), 1)[,1]
+data$income_level <- income_level
+
+data2 <- data
+
+low_income_countries <- c(
+  "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi", 
+  "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros", 
+  "Congo", "Congo", "Djibouti", "Egypt", 
+  "Equatorial Guinea", "Eritrea", "Eswatini", "Ethiopia", "Gabon", 
+  "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Cote d'Ivoire", "Kenya", 
+  "Lesotho", "Liberia", "Libya", "Madagascar", "Malawi", "Mali", 
+  "Mauritania", "Mauritius", "Morocco", "Mozambique", "Namibia", "Niger", 
+  "Nigeria", "Rwanda", "Sao Tome and Principe", "Senegal", "Seychelles", 
+  "Sierra Leone", "Somalia", "South Africa", "South Sudan", "Sudan", 
+  "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe", " China", "India"
+)
+
+middle_income_countries <- c(
+  "Saudi Arabia", "Russia", "United States", "Iran", "Iraq", 
+  "Kuwait", "Venezuela", "Mexico", "Libya", "Nigeria", 
+  "United Arab Emirates", "Indonesia", "China", "Canada", 
+  "Algeria", "Egypt", "United Kingdom", "Qatar", "Brazil", "Romania", "Poland", "Ukraine",
+  "Russia", "Ukraine", "Belarus", "Uzbekistan", "Kazakhstan", "Georgia", "Azerbaijan", 
+  "Lithuania", "Moldova", "Latvia", "Kyrgyzstan", "Tajikistan", "Armenia", "Turkmenistan", "Estonia",
+  "Argentina", "Brazil", "Chile", "Colombia", "Mexico", "Peru", "Ecuador", "Paraguay", "Uruguay", "Venezuela",
+  
+  # Asia
+  "Thailand", "Philippines", "Sri Lanka", "India", "Pakistan", "Indonesia", "Iran", "Iraq", "Jordan", 
+  
+  # Africa
+  "Egypt", "Algeria", "Morocco", "Tunisia", "Ivory Coast", "Kenya", "Ghana", "Nigeria", "Zimbabwe",
+  
+  # Eastern Europe / Soviet Bloc
+  "Poland", "Hungary", "Czechoslovakia", "Romania", "Bulgaria", "East Germany", "Ukraine", "Belarus",
+  
+  # Others
+  "Turkey", "Yugoslavia"
+)
+
+high_income_countries <- c(
+  "United States", "Canada", "United Kingdom", "France", "Germany",
+  "Italy", "Belgium", "Netherlands", "Luxembourg", "Denmark", "Norway", 
+  "Iceland", "Portugal", "Spain", "Greece", "Turkey", "Finland", "Singapore",
+  
+  # Other Western-aligned developed nations
+  "Australia", "New Zealand", "Japan", "Austria", "Switzerland", "Ireland", 
+  "Israel", "South Korea", "Taiwan", "Sweden"
+)
+
+data2$income_level[data$country %in% low_income_countries] <- 1
+data2$income_level[data$country %in% middle_income_countries] <- 2
+data2$income_level[data$country %in% high_income_countries] <- 3
+data2$income_level[data2$income_level == 0] <- 1
+data2$income_level <- as.factor(data2$income_level)
+
+#the below code adds a continent categorical variable
+
+africa <- c(
+  "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi",
+  "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros",
+  "Democratic Republic of Congo", "Congo", "Djibouti", "Egypt", "Equatorial Guinea",
+  "Eritrea", "Eswatini", "Ethiopia", "Gabon", "Gambia", "Ghana", "Guinea",
+  "Guinea-Bissau", "Cote d'Ivoire", "Kenya", "Lesotho", "Liberia", "Libya",
+  "Madagascar", "Malawi", "Mali", "Mauritania", "Mauritius", "Morocco",
+  "Mozambique", "Namibia", "Niger", "Nigeria", "Rwanda", "Sao Tome and Principe",
+  "Senegal", "Seychelles", "Sierra Leone", "Somalia", "South Africa", "South Sudan",
+  "Sudan", "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe", "Cape Verde"
+)
+
+# Asia
+asia <- c(
+  "Afghanistan", "Armenia", "Azerbaijan", "Bahrain", "Bangladesh", "Bhutan",
+  "Brunei", "Cambodia", "China", "Cyprus", "Georgia", "India", "Indonesia",
+  "Iran", "Iraq", "Israel", "Japan", "Jordan", "Kazakhstan", "Kuwait",
+  "Kyrgyzstan", "Laos", "Lebanon", "Malaysia", "Maldives", "Mongolia",
+  "Myanmar", "Nepal", "North Korea", "Oman", "Pakistan", "Palestine",
+  "Philippines", "Qatar", "Saudi Arabia", "Singapore", "South Korea", "Sri Lanka",
+  "Syria", "Taiwan", "Tajikistan", "Thailand", "Timor-Leste", "Turkey",
+  "Turkmenistan", "United Arab Emirates", "Uzbekistan", "Vietnam", "Yemen", "Hong Kong"
+)
+
+# Europe
+europe <- c(
+  "Albania", "Andorra", "Austria", "Belarus", "Belgium", "Bosnia and Herzegovina",
+  "Bulgaria", "Croatia", "Czech Republic", "Denmark", "Estonia", "Finland",
+  "France", "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Italy",
+  "Kosovo", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta",
+  "Moldova", "Monaco", "Montenegro", "Netherlands", "North Macedonia", "Norway",
+  "Poland", "Portugal", "Romania", "Russia", "San Marino", "Serbia", "Slovakia",
+  "Slovenia", "Spain", "Sweden", "Switzerland", "Ukraine", "United Kingdom", "Czechia",
+  "Vatican City"
+)
+
+# North America
+north_america <- c(
+  "Antigua and Barbuda", "Bahamas", "Barbados", "Belize", "Canada", "Costa Rica",
+  "Cuba", "Dominica", "Dominican Republic", "El Salvador", "Grenada", "Guatemala",
+  "Haiti", "Honduras", "Jamaica", "Mexico", "Nicaragua", "Panama",
+  "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines",
+  "Trinidad and Tobago", "United States"
+)
+
+# South America
+south_america <- c(
+  "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador",
+  "Guyana", "Paraguay", "Peru", "Suriname", "Uruguay", "Venezuela"
+)
+
+# Oceania
+oceania <- c(
+  "Australia", "Fiji", "Kiribati", "Marshall Islands", "Micronesia",
+  "Nauru", "New Zealand", "Palau", "Papua New Guinea", "Samoa",
+  "Solomon Islands", "Tonga", "Tuvalu", "Vanuatu"
+)
+
+data2$continent <- matrix(0, nrow(data2), 1)[,1]
+data2$continent[data2$country %in% africa] <- "Africa"
+data2$continent[data2$country %in% asia] <- "Asia"
+data2$continent[data2$country %in% europe] <- "Europe"
+data2$continent[data2$country %in% north_america] <- "North America"
+data2$continent[data2$country %in% south_america] <- "South America"
+data2$continent[data2$country %in% oceania] <- "Oceania"
+
+#we set the added variables as factor, so that the model doesn't mistake income level for a continuous variable
+data2$continent <- as.factor(data2$continent)
+data2$income_level <- as.factor(data2$income_level)
+
+year.1982 <- data2$year - 1982
+data2$year <- year.1982
+
+View(data2[data2$continent == 0,])
+country <- data2$country
+
+
+
+df <- data2[, sapply(data2, function(x) is.numeric(x) || is.factor(x))]
+
+
+colSums(is.na(df))
+
+#Lastly, we have two values we imputed using linear regression. Both missing values consisted of less than 5% of the total data lest, thus we believed this was an acceptable course of action
+
+#cement co2 imputation
+impute.cement <- lm(cement_co2 ~ ., data = df, na.action = na.exclude)
+missing_row <- is.na(df$cement_co2)
+df$cement_co2[missing_row] <- predict(impute.cement, newdata = df[missing_row, ])
+
+#land co2 imputation
+impute.land <- lm(land_use_change_co2 ~ ., data = df, na.action = na.exclude)
+missing_row <- is.na(df$land_use_change_co2)
+df$land_use_change_co2[missing_row] <- predict(impute.land, newdata = df[missing_row,])
+
+#scale the population and gdp values to be in line with the rest of the dataset
+df$gdp <- df$gdp / 10000000000
+df$population <- (df$population) / 1000000
+
+
+#lastly, we added back country labels for viewing/sumarisation
+df.labeled <- df
+df.labeled$country <- country
+View(df)
+
+
+# Install & load car package (only once)
+if (!require(car)) install.packages("car")
+library(car)
+
+# Select numeric predictors for VIF check (remove factors and response)
+dfVif = df %>% select(where(is.numeric))
+
+# Remove any highly missing columns if present
+dfVif = dfVif[, colSums(is.na(dfVif)) == 0]
+
+# Fit a linear model with gdp as the response (you can change this)
+vifModel = lm(gdp ~ ., data = dfVif)
+
+# Compute VIF
+vifValues = vif(vifModel)
+print(vifValues)
+
+# Optional: View high VIFs (>5)
+highVif = vifValues[vifValues > 5]
+cat("Variables with high multicollinearity (VIF > 5):\n")
+print(highVif)
+
+
+# Load libraries
+library(ggplot2)
 library(caret)
-library(zoo)
-
-# Load the dataset
-data <- read.csv("visualizing_global_co2_data.csv")
-
-
-
-# 1. Filter the data to include only rows where the year is greater than or equal to 1980
-data <- data %>% filter(year >= 1980)
-nrow(data)
-ncol(data)
-sum(is.na(data))
-# Alternatively, drop columns with too many missing values (e.g., more than 50% missing)
-threshold <- 0.5 * nrow(data)
-data <- data %>% select(which(colSums(is.na(data)) < threshold))
-nrow(data)
-ncol(data)
-# 2. Handle Missing Values
-# Impute missing values for numerical columns with the mean
-numerical_columns <- sapply(data, is.numeric)
-data[numerical_columns] <- lapply(data[numerical_columns], function(x) ifelse(is.na(x), mean(x, na.rm = TRUE), x))
-nrow(data)
-
-# 3. Remove Duplicate Entries
-data <- distinct(data)
-nrow(data)
-ncol(data)
-# 4. Data Type Conversion
-# Ensure 'year' is an integer
-data$year <- as.integer(data$year)
-sum(is.na(data))
-# Convert 'population' to numeric, handling any non-numeric entries
-data$population <- as.numeric(data$population)
-
-# 5. Handling Categorical Data (optional)
-# If 'country' and 'iso_code' need encoding, you can use one-hot encoding
-data <- data %>% mutate(country = factor(country)) # Convert country to factor for encoding if necessary
-data <- cbind(data, model.matrix(~ country - 1, data)) # One-hot encoding for country (if needed)
-nrow(data)
-# 6. Feature Scaling (standardization)
-numerical_columns <- names(data)[sapply(data, is.numeric)]
-data[numerical_columns] <- scale(data[numerical_columns])
-
-# 7. Outlier Detection
-# Example: Remove rows where 'co2' is above a certain threshold (adjust the threshold as needed)
-data <- data %>% filter(co2 < 10000)
-
-# 8. Create New Features (example: Year-over-year change in CO2)
-data$co2_growth <- c(NA, diff(data$co2) / head(data$co2, -1)) # Year-over-year percentage growth
-
-# 9. Check for Multicollinearity (optional)
-correlation_matrix <- cor(data[numerical_columns], use = "complete.obs")
-print("Correlation Matrix:")
-print(correlation_matrix)
-
-# 1. Interpolation for Time Series Data (Linear or Spline)
-# Interpolate missing values in the 'co2' column using linear interpolation
-data$co2 <- zoo(data$co2, order.by = data$year)
-data$co2 <- na.approx(data$co2)  # Linear interpolation
-
-# Alternatively, for spline interpolation, use this:
-# data$co2 <- na.spline(data$co2)  # Uncomment for spline interpolation
-
-# 2. Mode Imputation for Categorical Data
-# Impute missing 'country' values with the mode
-get_mode <- function(v) {
-  uniqv <- unique(v)
-  uniqv[which.max(tabulate(match(v, uniqv)))]
-}
-
-# Impute missing 'country' values with the mode
-data$country[is.na(data$country)] <- get_mode(data$country)
-sum(is.na(data))
-# 10. Data Splitting (optional)
-set.seed(42)
-trainIndex <- createDataPartition(data$co2, p = 0.7, list = FALSE) # 70% train, 30% test
-train_data <- data[trainIndex, ]
-test_data <- data[-trainIndex, ]
-
-
-print("Preprocessed Data:")
-print(head(data))
-
-
-```
-
-```{r}
-
-# Load required libraries
 library(dplyr)
-library(tidyr)
-library(caret)
-library(zoo)
 
-# Load the dataset
-data <- read.csv("visualizing_global_co2_data.csv")
+# Step 1: Select numeric features for clustering (exclude factor columns like income_level, continent)
+dfNumeric = df %>% select(where(is.numeric))
 
-# 1. Filter the data to include only rows where the year is greater than or equal to 1980
-data <- data %>% filter(year >= 1980)
-data <- data %>% select(-iso_code)
-# 2. Drop columns with too many missing values (e.g., more than 50% missing)
-threshold <- 0.5 * nrow(data)
-data <- data %>% select(which(colSums(is.na(data)) < threshold))
+# Step 2: Scale the numeric data
+dfScaled = scale(dfNumeric)
 
-# 3. Handle Missing Values
-# Impute missing values for numerical columns with the mean
-numerical_columns <- sapply(data, is.numeric)
-data[numerical_columns] <- lapply(data[numerical_columns], function(x) ifelse(is.na(x), mean(x, na.rm = TRUE), x))
+# Step 3: Run K-means with your desired k (e.g., 3 for income levels)
+set.seed(123)
+kmeansResult = kmeans(dfScaled, centers = 3, nstart = 25)
 
-# 4. Remove Duplicate Entries
-data <- distinct(data)
+# Step 4: Add cluster labels to original data
+df$cluster = as.factor(kmeansResult$cluster)
 
-# 5. Data Type Conversion
-# Ensure 'year' is an integer
-data$year <- as.integer(data$year)
+# Step 5: Optional — PCA for 2D Visualization
+pcaResult = prcomp(dfScaled)
+pcaData = data.frame(PC1 = pcaResult$x[, 1], PC2 = pcaResult$x[, 2],
+                     cluster = df$cluster, incomeLevel = df$income_level,
+                     continent = df$continent)
 
-# Convert 'population' to numeric, handling any non-numeric entries
-data$population <- as.numeric(data$population)
+# Plot clusters colored by cluster ID
+ggplot(pcaData, aes(PC1, PC2, color = cluster)) +
+  geom_point(size = 2) +
+  labs(title = "K-Means Clustering Results") +
+  theme_minimal()
 
-# 6. Handling Categorical Data (optional)
-# If 'country' and 'iso_code' need encoding, you can use one-hot encoding
-data <- data %>% mutate(country = factor(country))  # Convert country to factor for encoding if necessary
-data <- cbind(data, model.matrix(~ country - 1, data))  # One-hot encoding for country (if needed)
+# Plot clusters colored by true income level
+ggplot(pcaData, aes(PC1, PC2, color = incomeLevel)) +
+  geom_point(size = 2) +
+  labs(title = "True Income Levels (Colored)") +
+  theme_minimal()
 
-# 7. Feature Scaling (standardization)
-numerical_columns <- names(data)[sapply(data, is.numeric)]
-data[numerical_columns] <- scale(data[numerical_columns])
+# Step 6: Optional — Evaluate clustering alignment using confusion matrix
+# Remap clusters based on majority vote to match income_level
+clusterMapping = df %>%
+  group_by(cluster) %>%
+  count(income_level) %>%
+  slice_max(n, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(cluster, income_level) %>%
+  rename(mappedLabel = income_level)
 
-# 8. Outlier Detection
-# Example: Remove rows where 'co2' is above a certain threshold (adjust the threshold as needed)
-data <- data %>% filter(co2 < 10000)
+dfMapped = df %>%
+  left_join(clusterMapping, by = "cluster") %>%
+  mutate(mappedLabel = as.factor(mappedLabel))
 
-# 9. Create New Features (example: Year-over-year change in CO2)
-data$co2_growth <- c(NA, diff(data$co2) / head(data$co2, -1))  # Year-over-year percentage growth
+# Ensure same factor levels
+commonLevels = union(levels(dfMapped$mappedLabel), levels(dfMapped$income_level))
+dfMapped$mappedLabel = factor(dfMapped$mappedLabel, levels = commonLevels)
+dfMapped$income_level = factor(dfMapped$income_level, levels = commonLevels)
 
-# 10. Interpolation for Time Series Data (Linear or Spline)
-# Interpolate missing values in the 'co2' column using linear interpolation
-data$co2 <- zoo(data$co2, order.by = data$year)
-data$co2 <- na.approx(data$co2)  # Linear interpolation
-# Alternatively, for spline interpolation, use this:
-# data$co2 <- na.spline(data$co2)  # Uncomment for spline interpolation
-
-# 11. Mode Imputation for Categorical Data
-# Impute missing 'country' values with the mode
-get_mode <- function(v) {
-  uniqv <- unique(v)
-  uniqv[which.max(tabulate(match(v, uniqv)))]
-}
-
-# Impute missing 'country' values with the mode
-data$country[is.na(data$country)] <- get_mode(data$country)
-
-# 12. Check for Multicollinearity (optional)
-correlation_matrix <- cor(data[numerical_columns], use = "complete.obs")
-print("Correlation Matrix:")
-print(correlation_matrix)
-
-# 13. Data Splitting (optional)
-set.seed(42)
-trainIndex <- createDataPartition(data$co2, p = 0.7, list = FALSE)  # 70% train, 30% test
-train_data <- data[trainIndex, ]
-test_data <- data[-trainIndex, ]
-
-# Print the final preprocessed data
-print("Preprocessed Data:")
-print(head(data))
+# Compute confusion matrix
+confMatrix = confusionMatrix(dfMapped$mappedLabel, dfMapped$income_level)
+print(confMatrix)
 
 
+# Install & load car package (only once)
+if (!require(car)) install.packages("car")
+library(car)
 
-```
+# Select numeric predictors for VIF check (remove factors and response)
+dfVif = df %>% select(where(is.numeric))
 
-```{r}
+# Remove any highly missing columns if present
+dfVif = dfVif[, colSums(is.na(dfVif)) == 0]
+
+# Fit a linear model with gdp as the response (you can change this)
+vifModel = lm(gdp ~ ., data = dfVif)
+
+# Compute VIF
+vifValues = vif(vifModel)
+print(vifValues)
+
+# Optional: View high VIFs (>5)
+highVif = vifValues[vifValues > 5]
+cat("Variables with high multicollinearity (VIF > 5):\n")
+print(highVif)
+
+
+library(cluster)
+silhouetteScore = silhouette(kmeansResult$cluster, dist(dfScaled))
+mean(silhouetteScore[, 3])
+
+wss = sapply(2:10, function(k) kmeans(dfScaled, k, nstart=25)$tot.withinss)
+plot(2:10, wss, type = "b", main = "Elbow Method", xlab = "Number of clusters", ylab = "WSS")
+
 
 ```
