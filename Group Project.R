@@ -270,25 +270,6 @@ summary(model.tree)
 # correspond to notable global economic or policy events?"
 
 # Using Time Series Analysis(ARIMAX) with Structural Break Testing
-# Temporal Dynamics and Exogenous Influences:
-#   The ARIMAX model extends the traditional ARIMA framework by incorporating external regressors. 
-#   This allows it to capture both the inherent time series properties of log-transformed GDP and 
-#   the simultaneous impact of CO₂ emissions and related variables (such as cement and land use change CO₂ and population), 
-#   providing a comprehensive view of how these factors interact over time.
-# 
-# Structural Change Detection:
-#   Integrating structural break analysis into the workflow facilitates the identification of periods where
-#   the underlying relationships between the economic indicators and environmental variables may have shifted. 
-#   This is crucial for linking potential breakpoints with notable global economic or policy events, 
-#   thus offering deeper insights into regime-dependent dynamics.
-# 
-# Forecasting and Model Evaluation:
-#   By splitting the data into training and testing sets and evaluating forecast accuracy within both the overall and segmented datasets, 
-#   the model not only explains historical relationships but also validates its predictive performance. 
-#   This is important to confirm that the identified shifts are robust and relevant for forecasting future trends.
-# 
-# In summary, the ARIMAX with structural break testing is used because it effectively handles the complexities of time series data with exogenous drivers and 
-# allows for detecting and quantifying changes in relationships over time—a core requirement for your research question.
 # ============================================================
 
 # Load required libraries
@@ -299,7 +280,7 @@ library(forecast)      # for ARIMA forecasting and accuracy metrics
 
 ### ------------------------------
 ### 1. Data Aggregation and Structural Break Testing
-# Assume 'df' is your panel dataset with columns: year, gdp, co2, cement_co2, land_use_change_co2, population.
+
 df_yearly <- aggregate(cbind(gdp, co2, cement_co2, land_use_change_co2, population) ~ year,
                        data = df, FUN = mean)
 df_yearly$log_gdp <- log(df_yearly$gdp)
@@ -326,8 +307,6 @@ plot(df_yearly$year, resid(model_agg),
      pch = 19, col = "blue")
 abline(v = df_yearly$year[bp$breakpoints], col = "red", lwd = 2)
 
-### ------------------------------
-### 2. Converting to Time Series Objects & Preparing External Regressors
 # Create time series for log(GDP) and the regressors (annual data starting in 1982)
 ts_log_gdp <- ts(df_yearly$log_gdp, start = 1982, frequency = 1)
 ts_co2 <- ts(df_yearly$co2, start = 1982, frequency = 1)
@@ -340,14 +319,10 @@ external_regressors <- cbind(co2 = ts_co2,
                              land_use_change_co2 = ts_land_use_change_co2,
                              population = ts_population)
 
-### ------------------------------
-### 3. Evaluating the Aggregated ARIMAX Model
-
-# For forecast evaluation, split the time series.
+# For forecast evaluation we split the time series.
 # We use data from 1982 to 2013 as the training set and 2014 to the end as the test set.
 train <- window(ts_log_gdp, end = 2013)
 test  <- window(ts_log_gdp, start = 2014)
-
 train_regressors <- window(external_regressors, end = 2013)
 test_regressors  <- window(external_regressors, start = 2014)
 
@@ -363,16 +338,17 @@ forecast_arimax <- forecast(model_arimax_train, xreg = test_regressors, h = h_fo
 plot(forecast_arimax, main = "ARIMAX Forecast (Training Data: 1982-2013; Test Data: 2014-?)")
 lines(test, col = "purple", lwd = 1)
 
-# Evaluate forecast performance using common metrics: RMSE, MAE, MAPE, etc.
+# Evaluate forecast performance using common metrics like RMSE, MAE, MAPE.
 accuracy_metrics <- accuracy(forecast_arimax, test)
 print("Aggregated ARIMAX Model Forecast Accuracy:")
 print(accuracy_metrics)
-# This output provides RMSE, MAE, MAPE, and other metrics.
 
 ### ------------------------------
-### 4. Evaluating Segmented ARIMAX Models (Within Regime)
-# Using breakpoints, we segment the data. Here we demonstrate evaluation if each segment is long enough to have its own hold-out sample.
+### 4. Evaluating Segmented ARIMAX Models
+# Using breakpoints, we segment the data. 
+# Here we demonstrate evaluation if each segment is long enough to have its own hold-out sample.
 break_indices <- bp$breakpoints
+
 # Convert indices to years
 break_years <- df_yearly$year[break_indices]
 cat("Break years:", break_years, "\n")
@@ -449,19 +425,8 @@ for (i in 1:(length(segments)-1)) {
   cat("Segment", i, "(", seg_start, "to", seg_end, ") forecast accuracy:\n")
   print(acc_seg)
   
-  # Optional: Plot forecast vs. actual for this segment
+  # Plot forecast vs. actual for this segment
   plot(fc_seg, main = paste("ARIMAX Forecast for Segment", i, "(", seg_start, "to", seg_end, ")"))
   lines(ts_seg_test_log_gdp, col = "blue", lwd = 2)
 }
 
-# Brief Analysis of the Output:
-#
-# - Data consists of 37 annual observations. The aggregated regression has an excellent fit (R² ≈ 0.996),
-#   with significant positive effects from CO₂ and population.
-#
-# - Structural break tests detect breakpoints at observations 9, 18, and 27, suggesting shifts in the underlying relationships.
-#
-# - The aggregated ARIMAX model (an ARIMA(1,0,0) with exogenous predictors) shows strong persistence and good forecast accuracy.
-#
-# - Segmented ARIMAX models indicate that the effect of CO₂ varies across different regimes,
-#   pointing to evolving dynamics over time that may reflect changes in economic or policy contexts.
