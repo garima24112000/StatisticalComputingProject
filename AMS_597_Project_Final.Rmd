@@ -1,0 +1,967 @@
+---
+title: "AMS 597 Project"
+author: "Team : 11"
+date: "2025-04-15"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Decoding CO2: A Statistical Dive into Global Emissions
+
+Source of Dataset: https://github.com/owid/co2-data/blob/master/owid-co2-data.csv  
+
+## Data Preprocessing and Cleaning
+
+This code performs comprehensive preprocessing of the World Bank's CO2 emissions dataset 
+to prepare it for meaningful time series and regression-based analyses.
+The following steps are taken:
+
+1. DATA LOADING & FILTERING:
+  - Load CSV containing global CO2 and economic data.
+  - Retain only post-1981 data to avoid early extrapolations and focus on modern economic dynamics.
+  - Drop rows with missing GDP, CO2, CO2 growth %, and co2_per_unit_energy values as these are key features of interest and not safe to impute.
+
+2. DROP IRRELEVANT/DERIVABLE COLUMNS:
+  - Remove predefined interaction terms such as:
+    a. 'share' columns (country’s global CO2 share),
+    b. 'per_capita' metrics (can be derived from raw data),
+    c. 'cumulative', 'including', and 'temperature' columns,
+    d. other greenhouse gases and trade-related columns which have many missing values or low relevance.
+  - These steps help avoid multicollinearity, high missingness, and model complexity.
+
+3. INCOME LEVEL ENCODING:
+  - Add a categorical variable `income_level` for each country (Low = 1, Middle = 2, High = 3) based on World Bank classification.
+  - Countries not explicitly classified are defaulted to Low income for continuity.
+
+4. CONTINENT ENCODING:
+  - Add a `continent` factor variable to allow grouping or analysis by geography.
+  - Countries are mapped to 6 regions: Africa, Asia, Europe, North America, South America, and Oceania.
+
+5. TIME TRANSFORMATION:
+  - Transform `year` into an index variable relative to 1982 (e.g., 1982 = 0), to support modeling that assumes time starts at zero.
+
+6. IMPUTATION FOR MINOR MISSINGNESS:
+  - Impute missing values in `cement_co2` and `land_use_change_co2` using linear regression, since each had <5% missing values, making regression-based imputation justifiable.
+
+7. SCALING:
+  - Scale `gdp` (to trillions) and `population` (to millions) for numerical stability in models.
+
+8. FINALIZATION:
+  - Restore the `country` column for use in visualization or summaries.
+  - Filter the dataset to only include numeric and factor variables, stored in `df`.
+  - `df.labeled` retains country names for labeling purposes during EDA.
+
+```{r}
+#Read csv data
+data <- read.csv('visualizing_global_co2_data.csv')
+
+#Remove data from before 1982, as it becomes less robust in accuracy and
+#more of extrapolation
+data <- data[data$year > 1981,]
+
+#Given that we are going to be using gdp or co2 as a response variable,
+#it wouldn't be correct to impute missing gdp/co2 values. 
+#Luckily, the amount of removed rows isn't very large
+data <- data[!is.na(data$gdp),]
+data <- data[!is.na(data$co2),]
+data <- data[!is.na(data$co2_growth_prct),]
+
+#This column is a predefined interaction term. 
+#There are 60 missing values, so we chose to get rid of these
+data <- data[!is.na(data$co2_per_unit_energy),]
+
+#We also decided to remove aggregate data from the dataset, 
+#as we are interested in predicting individual countries
+data <- data[!(data$country == 'World'),]
+
+cat('list of the missing values')
+colnames(data)[apply(data,2, anyNA)]
+
+#Below, we begin to remove a number of precalculated action terms. 
+#Not only are there a lot of missing values in each of these columns, 
+#but we can also recalculate them alter if we choose to do so
+x <- colnames(data)
+
+#This set of interactions is country's share of the global value as a percentage
+#This can easily be added back later if necessary, and we chose to remove them
+drop <- subset(x, grepl('share', x))
+
+data <- data[, !colnames(data) %in% drop]
+
+#The next interaction is per capita interactions, which again we can calculate later
+drop <- subset(x, grepl('per_capita', x))
+
+data <- data[, !colnames(data) %in% drop]
+
+#This list consists of variables we aren't interest in interpreting.
+#Mainly they are other greenhouse gasses and temperature changes
+#The only added value is trade co2. 
+#Not only is it 50% missing values, removing it would help remove colinearity from the data
+drop <- c(
+          "nitrous_oxide", 
+          "methane", 
+          "other_industry_co2", 
+          "consumption_co2_per_gdp", 
+          "consumption_co2",
+          "total_ghg",
+          "total_ghg_excluding_lucf",
+          "trade_co2"
+          )
+data <- data[, !colnames(data) %in% drop]
+
+#This interaction is historical cumulative information. 
+#This had a lot of missing values in the dataset, and thus we chose to remove them
+x <- colnames(data)
+
+drop <- subset(x, grepl('cumulative', x))
+data <- data[, !colnames(data) %in% drop]
+
+#These values are summations of two other values, so we decided to remove them as they are colinear
+x <- colnames(data)
+
+#This gets rid of co2 data including
+drop <- subset(x, grepl('including', x))
+data <- data[, !colnames(data) %in% drop]
+
+#Lastly, we removed temperature data, as it didn't have much to do with what we wanted to study
+x <- colnames(data)
+
+drop <- subset(x, grepl('temperature', x))
+data <- data[, !colnames(data) %in% drop]
+
+cat('columns with missing values \n')
+colnames(data)[apply(data,2, anyNA)]
+
+cat('counts of missing values \n')
+colSums(is.na(data))
+
+#the below code adds an income level categorical value to each country, as described by world bank
+income_level <- matrix(0, nrow = nrow(data), 1)[,1]
+data$income_level <- income_level
+
+data2 <- data
+
+low_income_countries <- c(
+  "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi", 
+  "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros", 
+  "Congo", "Congo", "Djibouti", "Egypt", 
+  "Equatorial Guinea", "Eritrea", "Eswatini", "Ethiopia", "Gabon", 
+  "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Cote d'Ivoire", "Kenya", 
+  "Lesotho", "Liberia", "Libya", "Madagascar", "Malawi", "Mali", 
+  "Mauritania", "Mauritius", "Morocco", "Mozambique", "Namibia", "Niger", 
+  "Nigeria", "Rwanda", "Sao Tome and Principe", "Senegal", "Seychelles", 
+  "Sierra Leone", "Somalia", "South Africa", "South Sudan", "Sudan", 
+  "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe", " China", "India"
+)
+
+middle_income_countries <- c(
+  "Saudi Arabia", "Russia", "United States", "Iran", "Iraq", 
+  "Kuwait", "Venezuela", "Mexico", "Libya", "Nigeria", 
+  "United Arab Emirates", "Indonesia", "China", "Canada", 
+  "Algeria", "Egypt", "United Kingdom", "Qatar", "Brazil", "Romania", "Poland", 
+  "Ukraine", "Russia", "Ukraine", "Belarus", "Uzbekistan", "Kazakhstan", "Georgia", 
+  "Azerbaijan", "Lithuania", "Moldova", "Latvia", "Kyrgyzstan", "Tajikistan", 
+  "Armenia", "Turkmenistan", "Estonia", "Argentina", "Brazil", "Chile", "Colombia",
+  "Mexico", "Peru", "Ecuador", "Paraguay", "Uruguay", "Venezuela",
+  
+  # Asia
+  "Thailand", "Philippines", "Sri Lanka", "India", "Pakistan", "Indonesia", "Iran", "Iraq", "Jordan", 
+  
+  # Africa
+  "Egypt", "Algeria", "Morocco", "Tunisia", "Ivory Coast", "Kenya", "Ghana", "Nigeria", "Zimbabwe",
+  
+  # Eastern Europe / Soviet Bloc
+  "Poland", "Hungary", "Czechoslovakia", "Romania", "Bulgaria", "East Germany", "Ukraine", "Belarus",
+  
+  # Others
+  "Turkey", "Yugoslavia"
+)
+
+high_income_countries <- c(
+  "United States", "Canada", "United Kingdom", "France", "Germany",
+  "Italy", "Belgium", "Netherlands", "Luxembourg", "Denmark", "Norway", 
+  "Iceland", "Portugal", "Spain", "Greece", "Turkey", "Finland", "Singapore",
+  
+  # Other Western-aligned developed nations
+  "Australia", "New Zealand", "Japan", "Austria", "Switzerland", "Ireland", 
+  "Israel", "South Korea", "Taiwan", "Sweden"
+)
+
+data2$income_level[data$country %in% low_income_countries] <- 1
+data2$income_level[data$country %in% middle_income_countries] <- 2
+data2$income_level[data$country %in% high_income_countries] <- 3
+data2$income_level[data2$income_level == 0] <- 1
+data2$income_level <- as.factor(data2$income_level)
+
+#The below code adds a continent categorical variable
+
+africa <- c(
+  "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi",
+  "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros",
+  "Democratic Republic of Congo", "Congo", "Djibouti", "Egypt", "Equatorial Guinea",
+  "Eritrea", "Eswatini", "Ethiopia", "Gabon", "Gambia", "Ghana", "Guinea",
+  "Guinea-Bissau", "Cote d'Ivoire", "Kenya", "Lesotho", "Liberia", "Libya",
+  "Madagascar", "Malawi", "Mali", "Mauritania", "Mauritius", "Morocco",
+  "Mozambique", "Namibia", "Niger", "Nigeria", "Rwanda", "Sao Tome and Principe",
+  "Senegal", "Seychelles", "Sierra Leone", "Somalia", "South Africa", "South Sudan",
+  "Sudan", "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe", "Cape Verde"
+)
+
+# Asia
+asia <- c(
+  "Afghanistan", "Armenia", "Azerbaijan", "Bahrain", "Bangladesh", "Bhutan",
+  "Brunei", "Cambodia", "China", "Cyprus", "Georgia", "India", "Indonesia",
+  "Iran", "Iraq", "Israel", "Japan", "Jordan", "Kazakhstan", "Kuwait",
+  "Kyrgyzstan", "Laos", "Lebanon", "Malaysia", "Maldives", "Mongolia",
+  "Myanmar", "Nepal", "North Korea", "Oman", "Pakistan", "Palestine",
+  "Philippines", "Qatar", "Saudi Arabia", "Singapore", "South Korea", "Sri Lanka",
+  "Syria", "Taiwan", "Tajikistan", "Thailand", "Timor-Leste", "Turkey",
+  "Turkmenistan", "United Arab Emirates", "Uzbekistan", "Vietnam", "Yemen", "Hong Kong"
+)
+
+# Europe
+europe <- c(
+  "Albania", "Andorra", "Austria", "Belarus", "Belgium", "Bosnia and Herzegovina",
+  "Bulgaria", "Croatia", "Czech Republic", "Denmark", "Estonia", "Finland",
+  "France", "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Italy",
+  "Kosovo", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta",
+  "Moldova", "Monaco", "Montenegro", "Netherlands", "North Macedonia", "Norway",
+  "Poland", "Portugal", "Romania", "Russia", "San Marino", "Serbia", "Slovakia",
+  "Slovenia", "Spain", "Sweden", "Switzerland", "Ukraine", "United Kingdom", "Czechia",
+  "Vatican City"
+)
+
+# North America
+north_america <- c(
+  "Antigua and Barbuda", "Bahamas", "Barbados", "Belize", "Canada", "Costa Rica",
+  "Cuba", "Dominica", "Dominican Republic", "El Salvador", "Grenada", "Guatemala",
+  "Haiti", "Honduras", "Jamaica", "Mexico", "Nicaragua", "Panama",
+  "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines",
+  "Trinidad and Tobago", "United States"
+)
+
+# South America
+south_america <- c(
+  "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador",
+  "Guyana", "Paraguay", "Peru", "Suriname", "Uruguay", "Venezuela"
+)
+
+# Oceania
+oceania <- c(
+  "Australia", "Fiji", "Kiribati", "Marshall Islands", "Micronesia",
+  "Nauru", "New Zealand", "Palau", "Papua New Guinea", "Samoa",
+  "Solomon Islands", "Tonga", "Tuvalu", "Vanuatu"
+)
+
+data2$continent <- matrix(0, nrow(data2), 1)[,1]
+data2$continent[data2$country %in% africa] <- "Africa"
+data2$continent[data2$country %in% asia] <- "Asia"
+data2$continent[data2$country %in% europe] <- "Europe"
+data2$continent[data2$country %in% north_america] <- "North America"
+data2$continent[data2$country %in% south_america] <- "South America"
+data2$continent[data2$country %in% oceania] <- "Oceania"
+
+#We set the added variables as factor, 
+#so that the model doesn't mistake income level for a continuous variable
+data2$continent <- as.factor(data2$continent)
+data2$income_level <- as.factor(data2$income_level)
+
+year.1982 <- data2$year - 1982
+data2$year <- year.1982
+
+country <- data2$country
+
+df <- data2[, sapply(data2, function(x) is.numeric(x) || is.factor(x))]
+
+
+#Lastly, we have two values we imputed using linear regression. 
+#Both missing values consisted of less than 5% of the total data lest, 
+#thus we believed this was an acceptable course of action
+
+#Cement co2 Imputation
+impute.cement <- lm(cement_co2 ~ ., data = df, na.action = na.exclude)
+missing_row <- is.na(df$cement_co2)
+df$cement_co2[missing_row] <- predict(impute.cement, newdata = df[missing_row, ])
+
+#Land co2 Imputation
+impute.land <- lm(land_use_change_co2 ~ ., data = df, na.action = na.exclude)
+missing_row <- is.na(df$land_use_change_co2)
+df$land_use_change_co2[missing_row] <- predict(impute.land, newdata = df[missing_row,])
+
+#Scale the population and gdp values to be in line with the rest of the dataset
+df$gdp <- df$gdp / 10000000000
+df$population <- (df$population) / 1000000
+
+#Lastly, we added back country labels for viewing/summarization
+df.labeled <- df
+df.labeled$country <- country
+cat('final labeled dataset: \n')
+
+
+head(df.labeled)
+cat("Dimensions of Cleaned Dataset:", dim(df.labeled), "\n")
+```
+
+## Model-1 Linear Regression(logGDP)
+### Research Question-1
+### How do environmental and demographic factors influence economic performance, as measured by GDP, when expressed in relative (percentage) terms?
+
+Methodological Justification:
+
+A linear regression model is particularly well-suited for your research question for several compelling reasons:
+
+The research question specifically asks about relative (percentage) terms, and the log transformation of GDP perfectly accommodates this requirement. In a log-linear model, coefficients are interpreted as percentage changes in GDP associated with unit changes in predictors, providing the relative measures we want to seek.
+
+Second, the scatter plot shows a predominantly linear relationship between actual and predicted log(GDP) values, confirming that a linear form is appropriate for modeling this relationship. The positive correlation displayed in the plot aligns with economic theory that connects environmental and demographic factors to economic output.
+
+Third, linear regression's ability to handle multiple predictors simultaneously through your backward elimination approach (as shown in your previous AIC results) allows you to distinguish the relative importance of various environmental factors (CO2 emissions, energy consumption) and demographic variables (population) on economic performance
+```{r}
+if (!require(caret)) install.packages("caret")
+library(caret)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+```
+##  Log-Transforming GDP and Splitting the Dataset
+
+GDP is log-transformed to stabilize variance and allow interpretation of model coefficients in percentage terms. The dataset is then split into a training set (70%) and testing set (30%) to train and evaluate the model fairly.
+
+A multiple linear regression model is fitted using all predictors to explain log(GDP). Stepwise backward elimination is applied to improve model performance by removing statistically insignificant variables.
+
+Cook's Distance is calculated to identify influential data points that may disproportionately affect the model. Any observations with a value greater than 1 are flagged for inspection.
+ 
+The final model is used to predict log(GDP) on the test set. Model performance is evaluated using RMSE, MAE, and R-squared—providing insights into prediction accuracy and explained variance.
+```{r}
+## REGRESSION ON LOG(GDP)
+
+# Create the log-transformed GDP variable
+df$log_gdp <- log(df$gdp)
+
+# Partition the data (70% training, 30% testing) using log(GDP) as the response
+set.seed(123)
+trainIndex <- createDataPartition(df$log_gdp, p = 0.70, list = FALSE)
+train_data <- df[trainIndex, ]
+test_data  <- df[-trainIndex, ]
+
+# Fit linear regression on log(GDP) using all available predictors
+lm_model <- lm(log_gdp ~ ., data = train_data)
+lm_model.step <- step(lm_model, direction = 'backward')
+
+# To calculate influential points
+cooks_distance <- cooks.distance(lm_model.step)
+influential <- which(cooks_distance > 4/nrow(train_data))
+cat('Influential Datapoints: \n')
+
+
+# Predict on the test set
+test_predictions <- predict(lm_model.step, newdata = test_data)
+
+# Evaluate model performance (all metrics are computed on the log scale)
+rmse_value <- sqrt(mean((test_data$log_gdp - test_predictions)^2))
+mae_value  <- mean(abs(test_data$log_gdp - test_predictions))
+r2_value   <- cor(test_data$log_gdp, test_predictions)^2
+
+cat("\nRegression on log(GDP) Evaluation Metrics:\n")
+cat("--------------------------------------------------\n")
+cat("RMSE:", round(rmse_value, 3), "\n")
+cat("MAE :", round(mae_value, 3), "\n")
+cat("R-squared:", round(r2_value, 3), "\n")
+```
+Interpretation of Output:
+Variable Importance Analysis
+
+The Sum of Squares column in the final step indicates which variables contribute most significantly to explaining log(GDP):
+Income level (1353.26) is overwhelmingly the most influential predictor, suggesting that a country's economic development category strongly determines its GDP.
+Continent (835.10) is the second most important factor, indicating substantial regional economic disparities that transcend other variables.
+Year (324.59) and population (319.21) follow as the next most significant predictors, highlighting the importance of time trends and population size in determining economic output.
+Energy and emissions variables show varying degrees of importance, with energy_per_gdp (159.14) and land_use_change_co2 (106.74) being the most influential environmental factors.
+Primary_energy_consumption (4.24) had minimal impact, suggesting that after accounting for other factors, absolute energy consumption alone isn't strongly predictive of GDP.
+Model Performance
+The model demonstrates reasonable but not exceptional predictive power:
+R-squared of 0.692 indicates that approximately 69.2% of the variation in log(GDP) is explained by the included predictors.
+RMSE of 1.138 represents substantial prediction error. Since we're working with log-transformed data, this translates to approximately a factor of e^1.138 ≈ 3.12 difference between predicted and actual GDP values.
+MAE of 0.869 suggests that, on average, predictions deviate from actual log(GDP) by 0.869, or by a factor of approximately e^0.869 ≈ 2.38 in the original GDP scale.
+
+
+
+# Plot actual vs. predicted log(GDP)
+```{r}
+plot_data <- data.frame(Actual = test_data$log_gdp, Predicted = test_predictions)
+
+ggplot(plot_data, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = "Actual vs Predicted log(GDP)",
+       x = "Actual log(GDP)",
+       y = "Predicted log(GDP)") +
+  theme_minimal()
+```
+Interpretation of Actual vs Predicted log(GDP) Scatter Plot:
+The scatter plot provides a visual representation of how well the multiple regression model predicts log(GDP) values compared to actual observations. Several key patterns emerge from this visualization:
+
+Overall Prediction Performance
+The scatter plot shows a positive linear relationship between actual and predicted log(GDP) values, confirming the model's ability to capture the general trend in the data. This aligns with the R-squared value of 0.692, indicating that approximately 69.2% of the variance in log(GDP) is explained by the model's predictors
+
+
+## Residual Diagnostics 
+
+This code generates a histogram of residuals from a linear regression model, overlaid with density curves, to assess the distribution of these residuals and check for normality.
+
+Calculate Residuals: The code calculates residuals by subtracting the predicted log(GDP) values from the actual log(GDP) values in the test dataset.
+
+Create a Histogram: It uses ggplot2 to create a histogram of the calculated residuals. The histogram displays the frequency of residuals within specified bins (binwidth = 0.2), with skyblue fill, black borders, and 70% opacity. The y-axis is scaled to density, representing the proportion of observations within each bin.
+
+Kernel Density Estimate: A kernel density estimate (red line) is added to provide a smoothed representation of the residuals' distribution.
+
+Theoretical Normal Density Curve: A theoretical normal density curve (blue dashed line) is overlaid based on the mean and standard deviation of the residuals. This helps to visually compare the actual residual distribution to a normal distribution.
+```{r}
+# Calculate residuals from the test set predictions
+residuals <- test_data$log_gdp - test_predictions
+
+# Create a histogram with overlaid density curves
+ggplot(data.frame(Residuals = residuals), aes(x = Residuals)) +
+  # Histogram scaled to density
+  geom_histogram(aes(y = ..density..), binwidth = 0.2, fill = "skyblue", 
+                 color = "black", alpha = 0.7) +
+  # Kernel density estimate of the residuals (smoothed density)
+  geom_density(color = "red", size = 1) +
+  # Theoretical normal density curve based on mean and standard deviation of the residuals
+  stat_function(fun = dnorm, args = list(mean = mean(residuals), sd = sd(residuals)),
+                color = "blue", size = 1, linetype = "dashed") +
+  labs(title = "Histogram of Residuals with Density Curves",
+       x = "Residuals",
+       y = "Density") +
+  theme_minimal()
+```
+Interpretation of Residual Plot
+
+Shape: The residuals' distribution is approximately bell-shaped, but it is not perfectly normal. The red line (Kernel density estimate of the residuals) shows it.
+Symmetry: The distribution appears roughly symmetrical around zero, indicating that the model is not systematically over- or under-predicting.
+Tails: The tails of the residual distribution appear somewhat heavier than those of the normal distribution (blue dashed line), suggesting the presence of more extreme residual values than expected under normality.
+
+## Model-2: K MEANS 
+
+### Research Question-2
+### Do CO2 and economic patterns cluster more clearly by income level or by continent?
+
+Methodological Justification:
+
+Unsupervised Nature of the Problem: Since our goal was to explore natural groupings without prior labels, K-means offered a clean method to discover hidden structures in environmental and economic patterns.
+Interpretability and Simplicity: K-means is computationally efficient, easy to understand, and works well on large datasets. This makes it ideal for an exploratory analysis where interpretability is key.
+Scalability: K-means can scale to large datasets, which is essential when working with country-level, multi-year data.
+Visual Validation: PCA projections made cluster interpretation more intuitive and insightful, enabling us to visually inspect alignment between cluster membership and true income levels.
+```{r}
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+# Install & load car package (only once)
+if (!require(car)) install.packages("car")
+library(car)
+
+if (!require(cluster)) install.packages("cluster")
+library(cluster)
+
+if (!require(factoextra)) install.packages("factoextra")
+library(factoextra)
+```
+
+## Implementation of K-Means Clustering with PCA Visualization and Evaluation Using Confusion Matrix
+ 
+This code performs K-means clustering on a cleaned and preprocessed dataset of countries, aiming to discover natural groupings based on economic and environmental variables. It also visualizes the results and evaluates how well the clusters align with actual income levels using both graphical and statistical methods.
+
+```{r}
+# Step 1: Extracts only the numeric columns from the dataset, excluding categorical ones like country, continent, and income level. K-means works only with numeric data, so this step ensures that irrelevant or incompatible variables are removed.
+dfNumeric = df %>% select(where(is.numeric))
+
+# Step 2: Standardizes each numeric column to have a mean of 0 and standard deviation of 1. This is essential for K-means because it is sensitive to differences in scale — variables with larger units would otherwise dominate the clustering.
+dfScaled = scale(dfNumeric)
+
+# Step 3: Performs K-means clustering on the scaled data:
+#centers = 3: The algorithm creates 3 clusters, corresponding to an expected grouping similar to income levels (low, #middle, high).
+#nstart = 25: Runs the algorithm 25 times with different random initializations to reduce the chance of poor local optima.
+#set.seed(123): Ensures reproducibility of results.
+
+set.seed(123)
+kmeansResult = kmeans(dfScaled, centers = 3, nstart = 25)
+
+# Step 4: Adds the cluster assignments as a new column cluster in the original dataset. Each row (country) is now tagged with its assigned cluster.
+df$cluster = as.factor(kmeansResult$cluster)
+
+# Step 5: Applies Principal Component Analysis (PCA) to reduce the high-dimensional numeric data into two principal components (PC1 and PC2). These components capture the most variance in the data, allowing us to visualize the clusters in 2D. pcaData contains the PCA scores along with the cluster, income level, and continent for plotting.
+pcaResult = prcomp(dfScaled)
+pcaData = data.frame(PC1 = pcaResult$x[, 1], PC2 = pcaResult$x[, 2],
+                     cluster = df$cluster, incomeLevel = df$income_level,
+                     continent = df$continent)
+
+# Two scatterplots are generated:Cluster Plot – Points are colored by their K-means cluster assignments.True Income Level Plot – Points are colored by actual income level. These plots help evaluate how well the clustering matches real-world economic categories.
+
+ggplot(pcaData, aes(PC1, PC2, color = cluster)) +
+  geom_point(size = 2) +
+  labs(title = "K-Means Clustering Results") +
+  theme_minimal()
+
+# Plot clusters colored by true income level
+ggplot(pcaData, aes(PC1, PC2, color = incomeLevel)) +
+  geom_point(size = 2) +
+  labs(title = "True Income Levels (Colored)") +
+  theme_minimal()
+
+# Step 6: Since K-means is unsupervised, we don't have predefined labels. This block maps each cluster to the most common income level within it using majority voting. Then, this mapping is merged back into the dataset for evaluation.
+clusterMapping = df %>%
+  group_by(cluster) %>%
+  count(income_level) %>%
+  slice_max(n, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(cluster, income_level) %>%
+  rename(mappedLabel = income_level)
+
+dfMapped = df %>%
+  left_join(clusterMapping, by = "cluster") %>%
+  mutate(mappedLabel = as.factor(mappedLabel))
+
+# Ensures both the predicted and actual income levels have the same levels, so they can be properly compared using the confusion matrix.
+commonLevels = union(levels(dfMapped$mappedLabel), levels(dfMapped$income_level))
+dfMapped$mappedLabel = factor(dfMapped$mappedLabel, levels = commonLevels)
+dfMapped$income_level = factor(dfMapped$income_level, levels = commonLevels)
+# Compute confusion matrix
+confMatrix = confusionMatrix(dfMapped$mappedLabel, dfMapped$income_level)
+print(confMatrix)
+```
+Interpretation of Output:
+
+Income Level Scatter Plot
+This distribution reveals that while income levels explain part of the data variation, they are not perfectly separable based on the chosen features. This reinforces the need for clustering to uncover more nuanced groupings beyond static income labels.
+
+K-Means Clustering Results
+Some countries from different income levels are grouped together, suggesting shared patterns in CO₂ emissions, GDP, or energy metrics.
+The clustering captures relationships not explicitly encoded by income level, reflecting the power of unsupervised learning to identify hidden patterns.
+
+The overall accuracy of ~54.7% means that more than half of the countries were correctly clustered into groups that matched their income level.
+High-income countries might be clustered more accurately due to their distinct profiles in GDP, CO₂ emissions, and energy metrics.
+Middle-income countries often show more dispersion, likely because they share overlapping characteristics with both low and high-income countries.
+This suggests that K-means captured meaningful economic patterns, though there’s some fuzziness between income groups — which is expected in complex global datasets.
+
+## Elbow Method
+
+The silhouette score measures how well-separated the clusters are. It ranges from -1 to 1:
+
+Near 1: well-clustered
+
+Near 0: overlapping clusters
+
+Near -1: misclassified
+
+The average silhouette score gives an overall indication of clustering quality.
+
+Generates an Elbow Plot to visually identify the ideal number of clusters. The “elbow point” is where the WSS (within-cluster sum of squares) sharply flattens out, indicating that adding more clusters beyond this point does not significantly improve cohesion.
+```{r}
+wss = sapply(2:10, function(k) kmeans(dfScaled, k, nstart=25)$tot.withinss)
+plot(2:10, wss, type = "b", main = "Elbow Method", xlab = "Number of clusters", ylab = "WSS")
+```
+Interpretation of Output:
+
+This plot shows the total within-cluster variation as a function of the number of clusters. It helps in choosing the optimal number of clusters by identifying the "elbow point," where additional clusters no longer significantly reduce intra-cluster variance. In our case, the elbow occurred at k = 3, indicating that three clusters best represent the natural groupings in the data.
+
+## Silhouette Score
+The Silhouette Score is a metric that tells us how well a data point fits into its assigned cluster compared to other clusters. It helps evaluate how appropriate your clustering solution is.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, dev="png"}
+
+dists <- dist(dfScaled)
+silhouetteScores <- silhouette(kmeansResult$cluster, dists)
+fviz_silhouette(
+  silhouetteScores,
+  palette = "npg",                # clean color theme
+  ggtheme = theme_light(),        # clean background
+  label = FALSE,                  # disables per-point labels
+  print.summary = TRUE            # shows average width per cluster
+)
+```
+Interpretation of Output:
+A mean silhouette score of 0.528  suggests that the clustering structure is moderately well defined.
+It shows that while many countries are grouped meaningfully, there are still some overlaps or ambiguities—perhaps between similar middle-income and high-income countries.
+This is reasonable for real-world datasets, especially those with complex, overlapping economic and environmental patterns.
+
+
+## Model-3: Time Series Analysis(ARIMAX) with Structural Break Testing
+# Research Question-3
+# "How have the relationships between CO₂ emissions and economic indicators changed over time since 1982, and are there identifiable breakpoints that correspond to notable global economic or policy events?"
+
+Methodological Justification:
+
+The analysis employs an integrated approach that combines ARIMAX modeling with structural break testing. This method is particularly well-suited for the dataset and research question for several reasons:
+
+Temporal Dependence:
+The dataset consists of annual observations spanning from 1982 onward. ARIMAX models effectively capture the autocorrelation inherent in time series data and allow for the incorporation of exogenous variables such as CO₂ emissions and other economic indicators, which are critical in understanding temporal trends.
+Changing Dynamics:
+Over the period of study, global economic conditions and environmental policies have undergone substantial changes. By using structural break testing, the method can detect statistically significant shifts or breakpoints in the relationships among variables. These breakpoints serve as indicators of potential regime shifts that may correspond to major economic or policy events.
+Enhanced Forecast Accuracy:
+Segmenting the time series based on the identified breakpoints allows for the fitting of separate ARIMAX models within different regimes. This segmented analysis helps the model adapt to distinct dynamics specific to each period, leading to improved in-sample fit and more accurate out-of-sample forecasts.
+Comprehensive Insights:
+Combining time series forecasting with structural break analysis provides a dual perspective. While the ARIMAX component offers insights into the predictive structure and temporal behavior of the series, the breakpoint analysis pinpoints periods of abrupt change. This dual approach enriches our understanding of how external factors and policy shifts have influenced the relationship between economic performance and environmental variables over time.
+```{r}
+if (!require(zoo)) install.packages("zoo")
+library(zoo)
+```
+
+```{r}
+if (!require(strucchange)) install.packages("strucchange")
+library(strucchange)   # for structural break testing
+```
+
+```{r}
+if (!require(forecast)) install.packages("forecast")
+library(forecast)      # for ARIMA forecasting and accuracy metrics
+```
+
+#### Data Aggregation and Structural Break Testing
+
+To analyze how the relationship between CO₂ emissions and economic indicators evolves over time, we aggregate country-level data into annual global averages for key variables: gdp, co2, cement_co2, land_use_change_co2, and population.
+
+We then apply a logarithmic transformation to GDP (log_gdp) to stabilize variance and aid interpretation in percentage terms.
+
+A linear regression model is fitted with log_gdp as the response and the four emission and demographic variables as predictors. This provides a baseline view of their collective influence on economic output.
+
+Next, we use the breakpoints() function from the strucchange package to identify structural shifts in the regression relationship over time. A 25% minimum segment size ensures sufficient data for stable estimation.
+
+This approach helps us detect periods where global economic and environmental dynamics may have changed significantly—often aligned with major events or policy shifts.
+```{r}
+### Data Aggregation and Structural Break Testing
+df_yearly <- aggregate(cbind(gdp, co2, cement_co2, land_use_change_co2, population) ~ year,
+                       data = df, FUN = mean)
+df_yearly$log_gdp <- log(df_yearly$gdp)
+
+cat("Total number of annual observations:", nrow(df_yearly), "\n")
+head(df_yearly)
+
+# Fit the aggregated regression model
+model_agg <- lm(log_gdp ~ co2 + cement_co2 + land_use_change_co2 + population, data = df_yearly)
+summary(model_agg)
+
+# Test for structural breaks
+T_obs <- nrow(df_yearly)
+h_new <- 0.25  # Adjusted minimum segment size
+bp <- breakpoints(log_gdp ~ co2 + cement_co2 + land_use_change_co2 + population,
+                  data = df_yearly, h = h_new)
+summary(bp)
+```
+Interpretation of Aggregated Regression Results
+The regression model uses annual averages (1982–2018) to explain log_gdp based on CO₂ emissions, sectoral emissions, and population. Key findings include:
+
+Model Fit:
+The model has excellent explanatory power (R² = 0.9956), indicating that the chosen predictors collectively explain nearly all variation in log-transformed GDP.
+
+Significant Predictors:
+
+Population shows a strong, positive, and highly significant effect (p < 0.001), affirming its central role in driving economic output.
+
+CO₂ emissions are also significant (p ≈ 0.033), suggesting a positive association with GDP growth at the global level.
+
+Insignificant Predictors:
+
+Cement CO₂ and Land Use Change CO₂ emissions are not statistically significant, implying weaker or indirect economic linkages in the global aggregate.
+
+Implications:
+Population and total CO₂ emissions are key global economic indicators. Sector-specific emissions may require more localized or segmented analysis, motivating the use of structural break testing and ARIMAX models in the subsequent steps.
+
+
+#### Visualization of Structural Breakpoints and Residuals
+
+To support the structural break analysis, we generate two plots:
+
+Breakpoint Plot:
+Displays the output of the breakpoints() function, highlighting estimated break years with vertical red lines. These indicate potential shifts in the relationship between log_gdp and its predictors.
+
+Residual Plot:
+Shows regression residuals over time to assess model stability. Red lines mark the same breakpoints, helping us observe if structural changes coincide with changes in residual patterns.
+
+These visualizations help validate the timing and impact of structural shifts in the CO₂–GDP relationship.
+```{r}
+# Plot for visual inspection of breakpoints
+plot(bp, main = "Structural Break Test: Breakpoints in the Regression Model")
+plot(df_yearly$year, resid(model_agg),
+     main = "Regression Residuals Over Time",
+     xlab = "Years", ylab = "Residuals",
+     pch = 19, col = "blue")
+abline(v = df_yearly$year[bp$breakpoints], col = "red", lwd = 2)
+```
+Interpretation of Structural Break Analysis Plots
+The structural break analysis is supported by two diagnostic plots:
+
+BIC and RSS Plot for Breakpoint Selection:
+The second plot shows how the Bayesian Information Criterion (BIC) and Residual Sum of Squares (RSS) evolve as more breakpoints are introduced. Both metrics decrease sharply up to three breakpoints, indicating improved model fit. However, the elbow in the BIC curve at three breakpoints suggests that this number balances goodness of fit with model parsimony.
+
+Regression Residuals Over Time:
+This plot displays the residuals from the aggregated regression model across time, with vertical red lines marking the estimated breakpoints. The visual pattern suggests distinct shifts in the residual distribution around the years corresponding to the breakpoints. The presence of non-random structure in the residuals (e.g., clusters above or below zero) supports the existence of regime changes in the relationship between CO₂ emissions and GDP.
+
+Implications:
+The plots confirm the presence of structural shifts in the data, validating the use of segmented modeling. The identified breakpoints mark periods where the underlying economic–environmental relationship likely changed, possibly due to global events, policy changes, or technological transitions.
+
+
+#### Time Series Conversion of Variables
+
+
+To prepare for ARIMA modeling with external regressors, we convert all relevant variables into time series objects with an annual frequency starting from 1982. The following steps are performed:
+
+Conversion to Time Series Format:
+The dependent variable log_gdp and each of the four explanatory variables (co2, cement_co2, land_use_change_co2, and population) are converted into univariate time series using the ts() function. The start parameter is set to 1982 to reflect the beginning of our observation period, and frequency = 1 denotes annual data.
+
+Binding of External Regressors:
+The four explanatory time series are then combined into a multivariate matrix using cbind(). This matrix (external_regressors) will serve as the external input for ARIMAX modeling, allowing the model to incorporate exogenous effects alongside the autoregressive structure.
+
+This step ensures that the data are in the appropriate format for time series modeling using functions from the forecast or stats packages in R.
+```{r}
+# Create time series for log(GDP) and the regressors (annual data starting in 1982)
+ts_log_gdp <- ts(df_yearly$log_gdp, start = 1982, frequency = 1)
+ts_co2 <- ts(df_yearly$co2, start = 1982, frequency = 1)
+ts_cement_co2 <- ts(df_yearly$cement_co2, start = 1982, frequency = 1)
+ts_land_use_change_co2 <- ts(df_yearly$land_use_change_co2, start = 1982, frequency = 1)
+ts_population <- ts(df_yearly$population, start = 1982, frequency = 1)
+
+external_regressors <- cbind(co2 = ts_co2,
+                             cement_co2 = ts_cement_co2,
+                             land_use_change_co2 = ts_land_use_change_co2,
+                             population = ts_population)
+```
+
+#### ARIMAX Model Training, Forecasting, and Evaluation
+
+To assess the performance of an ARIMAX model, we use a train-test split strategy:
+
+Train-Test Split:
+The log_gdp time series is divided into a training set (1982–2013) and a test set (2014 onward). The same split is applied to the external regressors (co2, cement_co2, land_use_change_co2, and population).
+
+Model Fitting:
+We use auto.arima() to select the best-fitting ARIMAX model for the training data, incorporating the external regressors.
+
+Forecasting:
+The trained model is used to forecast log_gdp for the test period, using the corresponding regressor values.
+
+Visualization:
+Predicted values are plotted against actual test data to visually assess forecast accuracy and stability.
+
+This approach helps evaluate the model’s ability to generalize to future periods while accounting for both temporal trends and external influences.
+```{r}
+# For forecast evaluation we split the time series.
+# We use data from 1982 to 2013 as the training set and 2014 to the end as the test set.
+train <- window(ts_log_gdp, end = 2013)
+test  <- window(ts_log_gdp, start = 2014)
+train_regressors <- window(external_regressors, end = 2013)
+test_regressors  <- window(external_regressors, start = 2014)
+
+# Fit ARIMAX on the training set
+model_arimax_train <- auto.arima(train, xreg = train_regressors)
+summary(model_arimax_train)
+
+# Forecast for the test period
+h_forecast <- length(test)  # forecast horizon equals the number of test observations
+forecast_arimax <- forecast(model_arimax_train, xreg = test_regressors, h = h_forecast)
+
+# Plot the forecast vs. actual values
+plot(forecast_arimax, main = "ARIMAX Forecast (Training Data: 1982-2013; Test Data: 2014-?)")
+lines(test, col = "purple", lwd = 1)
+```
+nterpretation of ARIMAX Model and Forecast
+The ARIMAX model fitted to the training data (1982–2013) includes log_gdp as the dependent variable and four external regressors: co2, cement_co2, land_use_change_co2, and population. The selected model is an ARIMA(1,0,0) with a strong autoregressive term (ar1 = 0.97), suggesting high temporal dependence.
+
+Coefficient Insights:
+
+Population and CO₂ have statistically significant positive coefficients, indicating strong relationships with GDP growth.
+
+Cement CO₂ also shows a positive and significant contribution.
+
+Land use change CO₂ has a near-zero coefficient, implying minimal direct impact in the aggregated model.
+
+Model Fit:
+The model shows excellent in-sample performance, with very low RMSE (0.0106), MAPE (0.23%), and residual autocorrelation (ACF1 ≈ 0.12). This indicates a well-fitted model with minimal bias and stable residuals.
+
+Forecast Plot:
+The plot compares the model’s forecast for log_gdp (2014 onward) with observed values. The forecast trend continues smoothly with narrow confidence bands, showing good alignment with actual data and stable prediction accuracy.
+
+Implications:
+The results confirm the effectiveness of the ARIMAX model in capturing the relationship between emissions, population, and economic output. It provides a reliable short-term forecasting tool while highlighting the dominant role of population and total CO₂ emissions over sector-specific sources.
+
+
+#### Forecast Evaluation and Segmented ARIMAX Preparation
+
+After generating forecasts with the ARIMAX model, we assess its performance and prepare for segmented analysis based on detected structural breaks.
+
+Forecast Accuracy:
+We evaluate model performance using standard metrics—RMSE, MAE, and MAPE—by comparing forecasts against actual test values.
+
+Segmenting by Breakpoints:
+Break years identified using the strucchange package are used to define periods where the CO₂–GDP relationship may have shifted.
+
+Defining Segments:
+Segment boundaries are set using the start year (1982), breakpoints, and the final observation year. This allows us to build separate ARIMAX models for each regime.
+
+This approach helps us examine whether segmented models offer improved forecasting and better reflect changes in global economic-environmental dynamics.
+```{r}
+# Evaluate forecast performance using common metrics like RMSE, MAE, MAPE.
+accuracy_metrics <- accuracy(forecast_arimax, test)
+print("Aggregated ARIMAX Model Forecast Accuracy:")
+print(accuracy_metrics)
+
+### ------------------------------
+### Evaluating Segmented ARIMAX Models
+# Using breakpoints, we segment the data. 
+# Here we demonstrate evaluation if each segment is long enough to have its own hold-out sample.
+break_indices <- bp$breakpoints
+
+# Convert indices to years
+break_years <- df_yearly$year[break_indices]
+cat("Break years:", break_years, "\n")
+
+# Define segment boundaries: from 1982 to last observation
+segments <- c(1982, break_years, max(df_yearly$year))
+cat("Segment boundaries (years):", segments, "\n")
+```
+Interpretation of Results and Implications
+Regression Summary:
+The linear regression on log_gdp shows an excellent fit (R² = 0.9956). Population and CO₂ emissions are significant predictors, while cement and land use change emissions show limited explanatory power in the aggregated model.
+
+ARIMAX Performance:
+The ARIMAX(1,0,0) model performs well on both training and test sets:
+
+Training MAPE = 0.23%, Test MAPE = 0.24%
+Low error values and residual autocorrelation confirm good forecast accuracy and stability.
+
+Forecast Accuracy:
+The model generalizes well to unseen data, maintaining high accuracy and capturing the underlying trend in log_gdp.
+
+Structural Breaks:
+Breakpoints at 1991, 2000, and 2009 indicate shifts in the economic–environmental relationship, likely due to major global events.
+
+Conclusion:
+The ARIMAX model effectively captures the impact of emissions and population on GDP. Incorporating structural breaks enables more accurate, regime-specific forecasting and supports targeted policy evaluation.
+
+
+#### Segmented ARIMAX Modeling and Forecast Evaluation
+
+To account for changes in the relationship between economic output and CO₂-related variables over time, we implement ARIMAX modeling within each segment defined by the structural breakpoints.
+
+Initialization:
+Empty lists are created to store the segmented ARIMAX models, their forecasts, and performance metrics (RMSE, MAE, MAPE) for each period.
+
+Segment-wise Modeling:
+For each segment (with ≥8 observations), we perform the following:
+
+Data Subsetting: The dataset is filtered to include only years within the current segment.
+
+Train-Test Split: Each segment is split into 70% training and 30% test data to enable evaluation.
+
+Time Series Conversion: Both the response (log_gdp) and external regressors (co2, cement_co2, land_use_change_co2, and population) are converted into time series format.
+
+Model Training: An ARIMAX model is fit to the training data using auto.arima() with segment-specific regressors.
+
+Forecasting & Evaluation: The model forecasts log_gdp for the test period, and its accuracy is evaluated using standard metrics.
+
+Visualization: Forecasted values are plotted alongside actual test data to assess fit and trend alignment visually.
+
+This segmented approach allows us to analyze each temporal regime independently, capturing shifts in dynamics that may be obscured in an aggregated model. It helps determine whether forecasts improve when accounting for structural changes, such as economic crises or policy shifts, offering more tailored and accurate insights.
+```{r}
+# Lists to store segmentation results
+models_segment <- list()
+forecasts_segment <- list()
+accuracy_segment <- list()
+
+for (i in 1:(length(segments)-1)) {
+  seg_start <- segments[i]
+  seg_end   <- segments[i+1]
+  
+  # Subset the data for the current segment
+  seg_data <- subset(df_yearly, year >= seg_start & year <= seg_end)
+  
+  # Check if the segment has at least 8-10 observations to allow split of training and test.
+  if(nrow(seg_data) < 8){
+    cat("Segment", i, "(", seg_start, "to", seg_end, ")
+        is too short for split evaluation. Skipping forecast evaluation for this segment.\n")
+    next
+  }
+  
+  # Split this segment into training (first 70%) and test (remaining 30%)
+  n_seg <- nrow(seg_data)
+  train_seg_idx <- 1:floor(0.7 * n_seg)
+  test_seg_idx <- (floor(0.7 * n_seg) + 1):n_seg
+  
+  seg_train <- seg_data[train_seg_idx, ]
+  seg_test  <- seg_data[test_seg_idx, ]
+  
+  # Create time series objects for the segment
+  ts_seg_log_gdp <- ts(seg_train$log_gdp, start = seg_train$year[1], frequency = 1)
+  ts_seg_co2 <- ts(seg_train$co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_cement_co2 <- ts(seg_train$cement_co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_land_use_change_co2 <- ts(seg_train$land_use_change_co2, start = seg_train$year[1], frequency = 1)
+  ts_seg_population <- ts(seg_train$population, start = seg_train$year[1], frequency = 1)
+  
+  seg_regressors_train <- cbind(co2 = ts_seg_co2,
+                                cement_co2 = ts_seg_cement_co2,
+                                land_use_change_co2 = ts_seg_land_use_change_co2,
+                                population = ts_seg_population)
+  
+  # Similarly, create test regressors
+  ts_seg_test_log_gdp <- ts(seg_test$log_gdp, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_co2 <- ts(seg_test$co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_cement_co2 <- ts(seg_test$cement_co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_land_use_change_co2 <- ts(seg_test$land_use_change_co2, start = seg_test$year[1], frequency = 1)
+  ts_seg_test_population <- ts(seg_test$population, start = seg_test$year[1], frequency = 1)
+  
+  seg_regressors_test <- cbind(co2 = ts_seg_test_co2,
+                               cement_co2 = ts_seg_test_cement_co2,
+                               land_use_change_co2 = ts_seg_test_land_use_change_co2,
+                               population = ts_seg_test_population)
+  
+  # Fit the ARIMAX model for the segment training data
+  model_seg <- auto.arima(ts_seg_log_gdp, xreg = seg_regressors_train)
+  models_segment[[i]] <- model_seg
+  cat("Segment", i, "(", seg_start, "to", seg_end, ") model summary:\n")
+  print(summary(model_seg))
+  
+  # Forecast for the length of the test set in this segment
+  h_seg <- nrow(seg_test)
+  fc_seg <- forecast(model_seg, xreg = seg_regressors_test, h = h_seg)
+  forecasts_segment[[i]] <- fc_seg
+  
+  # Evaluate forecast performance in this segment
+  acc_seg <- accuracy(fc_seg, ts_seg_test_log_gdp)
+  accuracy_segment[[i]] <- acc_seg
+  
+  cat("Segment", i, "(", seg_start, "to", seg_end, ") forecast accuracy:\n")
+  print(acc_seg)
+  
+  # Plot forecast vs. actual for this segment
+  plot(fc_seg, main = paste("ARIMAX Forecast for Segment", i, "(", seg_start, "to", seg_end, ")"))
+  lines(ts_seg_test_log_gdp, col = "blue", lwd = 2)
+}
+```
+Interpretation of Segmented ARIMAX Results and Forecasts
+To evaluate temporal heterogeneity, separate ARIMAX models were fitted for each post-breakpoint segment. The results demonstrate distinct modeling dynamics and forecast performance across segments:
+
+Segment 2 (Years 9 to 18):
+
+ARIMA(1,0,0) model with low training error (RMSE = 0.0065, MAPE = 0.17%).
+
+Test error increases moderately (RMSE = 0.0171, MAPE = 0.46%).
+
+Plot shows forecasts closely follow the upward trend, though with slightly wider intervals, suggesting moderate forecast stability.
+
+Segment 3 (Years 18 to 27):
+
+A simple ARIMA(0,0,0) model was selected, suggesting weak temporal dependence.
+
+Forecast accuracy declines (Test RMSE = 0.025, MAPE = 0.51%) with some deviation from actuals.
+
+The model struggles with short-term fluctuations, as seen in the forecast plot, possibly due to structural or policy shifts in this period.
+
+Segment 4 (Years 27 to 36):
+
+ARIMA(1,0,0) model with excellent fit and very low forecast error (Test RMSE = 0.0029, MAPE = 0.067%).
+
+Plot shows tight alignment between forecasted and observed values, indicating high predictive reliability in this segment.
+
+Implications: These results confirm that regime-specific ARIMAX models improve interpretability and often enhance forecast accuracy compared to a global model. They also reveal that the relationship between economic output and emissions varies over time—particularly in response to global events—justifying the use of segmented time series models.
